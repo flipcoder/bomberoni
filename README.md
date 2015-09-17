@@ -7,9 +7,9 @@ Copyright (c) Grady O'Connell, 2015
 
 ## CREDITS
 
-Programming: Grady O'Connell <flipcoder@gmail.com>
+Programming: [Grady O'Connell](http://github.com/flipcoder)
 
-Graphics: Mark "Alfred" McDaniel <alfred523@gmail.com>
+Graphics: [Mark "Alfred" McDaniel](http://github.com/alfredanonymous)
 
 ## What next?
 

@@ -29,7 +29,7 @@ FONT = './data/fonts/Early GameBoy.ttf'
 TRANS = (255,0,255)
 EPSILON = 1 ** -4
 
-AXES = (6,7)
+AXES = (0,1)
 
 def sgn(a):
     return (a > 0) - (a < 0)
