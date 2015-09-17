@@ -941,9 +941,9 @@ class GameMode(Mode):
         self.sessions = []
         spawns = (
             (TILE_SZ*1.0, TILE_SZ*1.0),
+            ((self.world.w-2)*TILE_SZ*1.0, (self.world.h-2)*TILE_SZ*1.0),
             (TILE_SZ*1.0, (self.world.h-2)*TILE_SZ*1.0),
-            ((self.world.w-2)*TILE_SZ*1.0, TILE_SZ*1.0),
-            ((self.world.w-2)*TILE_SZ*1.0, (self.world.h-2)*TILE_SZ*1.0)
+            ((self.world.w-2)*TILE_SZ*1.0, TILE_SZ*1.0)
         )
         
         for i in range(len(self.game.profiles)):
@@ -1019,8 +1019,10 @@ class MenuMode(Mode):
         if self.choice == 0:
             self.game.mode = GameMode(self.game, role=Role.Local)
         elif self.choice == 1:
+            #self.game.mode = GameMode(self.game, role=Role.Client)
             pass
         elif self.choice == 2:
+            #self.game.mode = GameMode(self.game, role=Role.Server)
             pass
         elif self.choice == 3:
             pass
