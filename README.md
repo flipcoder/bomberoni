@@ -1,4 +1,4 @@
-# bomberonni
+# bomberoni
 
 Bomberman clone speedhacked in python.
 Copyright (c) Grady O'Connell, 2015
