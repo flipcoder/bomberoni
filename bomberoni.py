@@ -362,18 +362,10 @@ class Guy(Object):
         self.frames = {
             "down": [0,1,2,1,3,4,5,4],
             "up": [12,13,14,13,15,16,17,16],
-            #"right": [18,19,20,19,21,22,23,22],
             "right": [21,22,23,22,24,25,26,25],
             "left": [6,7,8,7,9,10,11,10],
             "death": [18,19,20]
         }
-        #self.surfaces += tileset(fn, hflip=True)[3:6]
-        #self.frames = {
-        #    "down": [0,1,0,2],
-        #    "up": [6,7,6,8],
-        #    "left": [9,10,9,11],
-        #    "right": [3,4,3,5]
-        #}
         self.anim_point = 0.0
         self.state = "down"
         self.normal_anim_speed = 12.0
@@ -662,26 +654,10 @@ class Guy(Object):
             int(round((self.sz.y/2.0)))
         )
 
-    #def render(self, view):
-    #    self.game.screen.buf.blit(self.surface, self.pos - view)
-
-#class Tile(Object):
-#    def __init__(self, surface, **kwargs):
-#        super(self.__class__, self).__init__(**kwargs)
-#        self.surface = surface
-#    def render(self, view):
-#        self.game.screen.buf.blit(self.surface, self.pos - view)
-
 class World:
     def __init__(self, game):
-        #self.tmx = pytmx.util_pygame.load_pygame(fn)
-        #for img in self.tmx.images:
-        #    if img:
-        #        img.set_colorkey(TRANS)
         self.sz = Vector2(
             SCREEN_SZ[0], SCREEN_SZ[1]
-            #self.tmx.width * self.tmx.tilewidth,
-            #self.tmx.height * self.tmx.tileheight
         )
         self.ofs = Vector2()
         
@@ -748,13 +724,6 @@ class World:
                     obj = Wall(game=game, pos=(i*TILE_SZ*1.0, j*TILE_SZ*1.0), sz=TILE_SZ_T,surface=self.bwall, solid=True, breakable=True)
                     self.attach(obj)
         
-        #self.spawns = []
-        #for layer in self.tmx.visible_layers:
-        #    if isinstance(layer, pytmx.TiledObjectGroup):
-        #        for obj in layer:
-        #            if obj.name == 'S':
-        #                self.spawns += [obj]
-
         self.next_level = False
         
     def attach(self, obj):
@@ -810,18 +779,8 @@ class World:
         
     def logic(self):
         pass
-        #if self.next_level:
-        #    self.game.level += 1
-        #    self.next_level = False
-        #    self.game.reset()
         
     def render(self, view):
-        #tw = self.tmx.tilewidth
-        #th = self.tmx.tileheight
-        #for layer in self.tmx.visible_layers:
-        #    if isinstance(layer, pytmx.TiledTileLayer):
-        #        for x, y, img in layer.tiles():
-        #            self.game.screen.buf.blit(img, (x*tw-view.x, y*th-view.y))
 
         for obj in self.objects:
             obj.render(self.ofs - view)
@@ -850,9 +809,6 @@ class Joystick(object):
         except IndexError:
             return False
     def axis_crit(self, b, v=None, consume=False):
-        """
-        Is an axis passed its threshold?
-        """
         try:
             if v == None:
                 
@@ -870,21 +826,6 @@ class Joystick(object):
                     self.axis_consumed_[b*2] = False
                     self.axis_consumed_[b*2+1] = False
                     return 0
-
-                #if self.axis_[b] < -self.threshold:
-                #    was = self.axis_crit_[b*2]
-                #    self.axis_crit_[b*2] = not consume
-                #    self.axis_crit_[b*2+1] = False
-                #    return -1 if was>=0 else 0
-                #elif self.axis_[b] > self.threshold:
-                #    was = self.axis_crit_[b*2+1]
-                #    self.axis_crit_[b*2] = False
-                #    self.axis_crit_[b*2+1] = not consume
-                #    return 1 if was<=0 else 0
-                #else:
-                #    self.axis_crit_[b*2] = False
-                #    self.axis_crit_[b*2+1] = False
-                #    return 0
 
             self.axis_[b] = v
         except IndexError:
@@ -1076,7 +1017,7 @@ class MenuMode(Mode):
         
     def select(self):
         if self.choice == 0:
-            self.game.mode = GameMode(self.game)
+            self.game.mode = GameMode(self.game, role=Role.Local)
         elif self.choice == 1:
             pass
         elif self.choice == 2:
