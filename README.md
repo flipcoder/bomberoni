@@ -1,4 +1,4 @@
-[bomberoni](https://github.com/flipcoder/bomberoni/blob/master/screen.png?raw=true)
+![bomberoni](https://github.com/flipcoder/bomberoni/blob/master/screen.png?raw=true)
 
 # bomberoni
 
