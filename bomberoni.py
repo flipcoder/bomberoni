@@ -212,6 +212,8 @@ class Splode(Object):
             self.anim_point = 0.0
             self.attached = False
         a = int(round(self.anim_point))
+        if a > 3: # smoke frames no longer damage
+            self.hurt = False
         self.surface = self.surfaces[self.frames[self.state][a]]
     
 class Bomb(Object):
