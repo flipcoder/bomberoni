@@ -898,17 +898,17 @@ class Profile(object):
             k = set(map(lambda x: ord(x), ('i','k','j','l',' '))) & set(self.game.keys)
 
             if b == 0:
-                r = ' ' in k
+                r = ord(' ') in k
                 if r:
                     self.game.keys.remove(ord(' '))
             elif b == 'left':
-                r = 'j' in k
+                r = ord('j') in k
             elif b == 'right':
-                r = 'l' in k
+                r = ord('l') in k
             elif b == 'up':
-                 r = 'i' in k
+                 r = ord('i') in k
             elif b == 'down':
-                r = 'k' in k
+                r = ord('k') in k
         
         return r
 
