@@ -22,7 +22,7 @@ SCALE = 4
 TILE_SZ = 16
 TILE_SZ_T = (TILE_SZ*1.0,TILE_SZ*1.0)
 #SCREEN_SZ = (SCREEN_W, SCREEN_H)
-SCALED_SZ = (1366,768)
+SCALED_SZ = (1920,1080)
 SCREEN_SZ = (SCALED_SZ[0] // SCALE, SCALED_SZ[1] // SCALE)
 #SCALED_SZ = (SCREEN_W * SCALE, SCREEN_H * SCALE)
 FONT = './data/fonts/Early GameBoy.ttf'
@@ -336,8 +336,15 @@ class Guy(Object):
         super(self.__class__, self).__init__(**kwargs)
         
         self.profile = kwargs.get('profile')
+
+        self.char = [
+            'army',
+            'fetusmaximus',
+            'sheepy',
+            'army'
+        ][self.profile.num]
         
-        fn = './data/gfx/bomber-army.png'
+        fn = './data/gfx/bomber-%s.png' % self.char
         self.surfaces = tileset(fn)
         self.surfaces += tileset(fn, hflip=True)[6:13]
 
@@ -856,6 +863,7 @@ class Profile(object):
         self.num = num
         self.score = 0
         self.client = None
+        #self.color = (0xFF, 0xFF, 0xFF)
         if num == 0:
             self.color = (0xFF, 0xFF, 0xFF)
         elif num == 1:
@@ -895,6 +903,7 @@ class Profile(object):
         
         # temp keys
         if self.num == 0:
+        # if self.num == 0 and not self.joy:
             k = set(map(lambda x: ord(x), ('i','k','j','l',' '))) & set(self.game.keys)
 
             if b == 0:
@@ -923,7 +932,6 @@ class Mode(object):
 class GameMode(Mode):
     def __init__(self, game, role=Role.Local):
         self.game = game
-        self.world = World(self.game)
         self.role = role
         
         self.guys = []
@@ -932,6 +940,8 @@ class GameMode(Mode):
         self.game.play(self.game.play_snd)
 
     def reset(self):
+
+        self.world = World(self.game)
         
         for guy in self.guys:
             if guy:
@@ -947,7 +957,7 @@ class GameMode(Mode):
             (TILE_SZ*1.0, (self.world.h-2)*TILE_SZ*1.0),
             ((self.world.w-2)*TILE_SZ*1.0, TILE_SZ*1.0)
         )
-        
+ 
         for i in range(len(self.game.profiles)):
             if self.game.profiles[i]:
                 g = Guy(profile=self.game.profiles[i], game=self.game, mode=self, pos=spawns[i], sz=TILE_SZ_T)
