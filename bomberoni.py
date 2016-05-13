@@ -11,12 +11,13 @@ import numpy
 import math
 import weakref
 import six
+import enet
 
-random.seed()
+# random.seed()
 
 TITLE = 'BOMBERONI'
 #SCALE = 3
-SCALE = 4
+SCALE = 3
 #SCREEN_W = 400
 #SCREEN_H = 225
 TILE_SZ = 16
@@ -31,11 +32,40 @@ EPSILON = 1 ** -4
 
 AXES = (0,1)
 
-SERVER = False
-try:
-    SERVER = (sys.argv[1] == '-s')
-except:
-    pass
+class Net:
+    def __init__(self):
+        self.server = False
+        try:
+            self.server = (sys.argv[1] == '-s')
+        except:
+            pass
+
+        client = False
+        try:
+            client = (len(sys.argv) >= 2)
+        except:
+            pass
+
+        local = not self.server and not cilent
+        online = not local
+
+        self.socket = None
+        if self.server:
+            self.socket = enet.Host(enet.Address(sys.argv[1], 11523), 10, 0, 0, 0)
+        if self.client:
+            host = enet.Host(None, 1, 0, 0, 0)
+            self.socket = host.connect(enet.Address(b"localhost", 11523), 1)
+    
+    def poll(self):
+        event = self.socket.service(1)
+        if event.type == enet.EVENT_TYPE_CONNECT:
+            pass
+        elif event.type == enet.EVENT_TYPE_DISCONNECT:
+            pass
+        elif event.type == enet.EVENT_TYPE_RECEIVE:
+            pass
+
+net = Net()
 
 def sgn(a):
     return (a > 0) - (a < 0)
@@ -46,7 +76,7 @@ def load_image(fn):
     return img
 
 def tileset(fn, **kwargs):
-    if SERVER:
+    if net.server:
         return []
     img = load_image(fn)
     w, h = img.get_size()
@@ -77,7 +107,7 @@ class Object(object):
         self.surfaces = kwargs.get('surfaces', None)
         if isinstance(self.surfaces, str):
             self.surfaces = tileset(self.surfaces)
-        if not SERVER:
+        if not net.server:
             if self.surfaces and len(self.surfaces):
                 self.surface = self.surfaces[0]
         self.solid = kwargs.get('solid', True)
@@ -345,6 +375,7 @@ class Guy(Object):
         super(self.__class__, self).__init__(**kwargs)
         
         self.profile = kwargs.get('profile')
+        self.dummy = kwargs.get("dummy", False)
 
         self.char = [
             'army',
@@ -354,7 +385,7 @@ class Guy(Object):
         ][self.profile.num]
         
         fn = './data/gfx/bomber-%s.png' % self.char
-        if not SERVER:
+        if not net.server:
             self.surfaces = tileset(fn)
             self.surfaces += tileset(fn, hflip=True)[6:13]
 
@@ -598,7 +629,10 @@ class Guy(Object):
             self.kill()
 
         if not self.frozen:
-            btn = self.profile.btn(0)
+            btn = False
+            if not self.dummy:
+                btn = self.profile.btn(0)
+                btn2 = self.profile.btn(1)
             if self.curse == Curse.AlwaysPlant or btn:
                 multiplanted = False
                 if self.multi:
@@ -616,7 +650,7 @@ class Guy(Object):
                     # try to plant bomb (normal planting behavior)
                     if self.plant():
                         self.profile.btn(0, consume=True)
-            elif self.profile.btn(1):
+            elif btn2:
                 #if self.last_bomb:
                 #    b = self.last_bomb()
                 #    if b:
@@ -640,7 +674,7 @@ class Guy(Object):
                             self.game.play(self.game.detonate_snd)
                             b.explode()
         
-        if not SERVER:
+        if not net.server:
             if self.vel.magnitude() > 0.0 or self.state == "death":
                 self.anim_point += t * self.anim_speed
                 if self.anim_point >= len(self.frames[self.state])-1:
@@ -722,28 +756,32 @@ class World:
         s = sum(self.items_p)
         self.items_p = map(lambda x: x / s, self.items_p)
         
-        for j in range(0, self.h):
-            for i in range(0, self.w):
-                if i==0 or j==0 or i==w-1 or j==h-1:
-                    obj = Wall(game=game, pos=(i*TILE_SZ*1.0, j*TILE_SZ*1.0), sz=TILE_SZ_T, surface=self.wall, solid=True)
-                    self.attach(obj)
-                elif i%2==0 and j%2==0:
-                    obj = Wall(game=game, pos=(i*TILE_SZ*1.0, j*TILE_SZ*1.0), sz=TILE_SZ_T, surface=self.wall, solid=True)
-                    self.attach(obj)
-                elif random.random() < 0.8:
-                    
-                    # don't sprinkle in spawns
-                    if i==1 and 1<=j<=3 or j==1 and 1<=i<=3:
-                        continue
-                    if i==w-2 and 1<=j<=3 or j==1 and w-4<=i<=w-2:
-                        continue
-                    if i==w-2 and h-4<=j<=h-2 or j==h-2 and w-4<=i<=w-2:
-                        continue
-                    if i==1 and h-4<=j<=h-2 or j==h-2 and 1<=i<=3:
-                        continue
-                    
-                    obj = Wall(game=game, pos=(i*TILE_SZ*1.0, j*TILE_SZ*1.0), sz=TILE_SZ_T,surface=self.bwall, solid=True, breakable=True)
-                    self.attach(obj)
+        # random.seed(random.randint(0,999))
+        random.seed(0)
+        
+        if net.local or net.server:
+            for j in range(0, self.h):
+                for i in range(0, self.w):
+                    if i==0 or j==0 or i==w-1 or j==h-1:
+                        obj = Wall(game=game, pos=(i*TILE_SZ*1.0, j*TILE_SZ*1.0), sz=TILE_SZ_T, surface=self.wall, solid=True)
+                        self.attach(obj)
+                    elif i%2==0 and j%2==0:
+                        obj = Wall(game=game, pos=(i*TILE_SZ*1.0, j*TILE_SZ*1.0), sz=TILE_SZ_T, surface=self.wall, solid=True)
+                        self.attach(obj)
+                    elif random.random() < 0.8:
+                        
+                        # don't sprinkle inside/around spawning area
+                        if i==1 and 1<=j<=3 or j==1 and 1<=i<=3:
+                            continue
+                        if i==w-2 and 1<=j<=3 or j==1 and w-4<=i<=w-2:
+                            continue
+                        if i==w-2 and h-4<=j<=h-2 or j==h-2 and w-4<=i<=w-2:
+                            continue
+                        if i==1 and h-4<=j<=h-2 or j==h-2 and 1<=i<=3:
+                            continue
+                        
+                        obj = Wall(game=game, pos=(i*TILE_SZ*1.0, j*TILE_SZ*1.0), sz=TILE_SZ_T,surface=self.bwall, solid=True, breakable=True)
+                        self.attach(obj)
         
         self.next_level = False
         
@@ -802,7 +840,7 @@ class World:
         pass
         
     def render(self, view):
-        if SERVER:
+        if net.server:
             return
         for obj in self.objects:
             obj.render(self.ofs - view)
@@ -999,7 +1037,7 @@ class GameMode(Mode):
         self.world.objects.sort(cmp=render_order)
     
     def render(self):
-        if SERVER:
+        if net.server:
             return
         self.game.screen.buf.fill((0,128,0))
         scr = self.game.screen
@@ -1014,7 +1052,7 @@ class GameMode(Mode):
         self.world.render((0.0, 0.0))
 
 def text_center(scr, font, text, n=1, col=(0xFF,0xFF,0xFF), pos=(0,0), shadow=None):
-    if SERVER:
+    if net.server:
         return
     tx = font.render(text, n, col)
     if shadow:
@@ -1096,7 +1134,7 @@ class MenuMode(Mode):
             self.select()
     
     def render(self):
-        if SERVER:
+        if net.server:
             return
         self.game.screen.buf.fill((0,128,0))
         scr = self.game.screen
@@ -1199,13 +1237,16 @@ class Engine:
             self.logic(t)
             if self.done:
                 break
-            if not SERVER:
+            if not net.server:
                 self.render()
                 self.draw()
         
         return 0
        
     def logic(self, t):
+        
+        if ONLINE:
+            net.poll()
         
         for ev in pygame.event.get():
             if ev.type == pygame.QUIT:
@@ -1243,12 +1284,12 @@ class Engine:
         self.mode.logic(t)
     
     def render(self):
-        if SERVER:
+        if net.server:
             return
         self.mode.render()
     
     def draw(self):
-        if SERVER:
+        if net.server:
             return
         self.screen.render()
         pygame.display.flip()
