@@ -22,7 +22,7 @@ SCALE = 4
 TILE_SZ = 16
 TILE_SZ_T = (TILE_SZ*1.0,TILE_SZ*1.0)
 #SCREEN_SZ = (SCREEN_W, SCREEN_H)
-SCALED_SZ = (1920,1080)
+SCALED_SZ = (1024,768)
 SCREEN_SZ = (SCALED_SZ[0] // SCALE, SCALED_SZ[1] // SCALE)
 #SCALED_SZ = (SCREEN_W * SCALE, SCREEN_H * SCALE)
 FONT = './data/fonts/Early GameBoy.ttf'
@@ -30,6 +30,12 @@ TRANS = (255,0,255)
 EPSILON = 1 ** -4
 
 AXES = (0,1)
+
+SERVER = False
+try:
+    SERVER = (sys.argv[1] == '-s')
+except:
+    pass
 
 def sgn(a):
     return (a > 0) - (a < 0)
@@ -40,6 +46,8 @@ def load_image(fn):
     return img
 
 def tileset(fn, **kwargs):
+    if SERVER:
+        return []
     img = load_image(fn)
     w, h = img.get_size()
     tiles = []
@@ -69,8 +77,9 @@ class Object(object):
         self.surfaces = kwargs.get('surfaces', None)
         if isinstance(self.surfaces, str):
             self.surfaces = tileset(self.surfaces)
-        if self.surfaces and len(self.surfaces):
-            self.surface = self.surfaces[0]
+        if not SERVER:
+            if self.surfaces and len(self.surfaces):
+                self.surface = self.surfaces[0]
         self.solid = kwargs.get('solid', True)
         self.breakable = kwargs.get('breakable', False)
         self.origin = Vector2(kwargs.get('origin', (0.0,self.sz.y)))
@@ -345,28 +354,29 @@ class Guy(Object):
         ][self.profile.num]
         
         fn = './data/gfx/bomber-%s.png' % self.char
-        self.surfaces = tileset(fn)
-        self.surfaces += tileset(fn, hflip=True)[6:13]
+        if not SERVER:
+            self.surfaces = tileset(fn)
+            self.surfaces += tileset(fn, hflip=True)[6:13]
 
-        if self.profile.color != (255,255,255):
-            for s in self.surfaces:
-                s.lock()
-                for y in xrange(s.get_height()):
-                    for x in xrange(s.get_width()):
-                        player_col = pygame.Color(
-                            self.profile.color[0],
-                            self.profile.color[1],
-                            self.profile.color[2],
-                            255
-                        )
-                        pxc = copy(s.get_at((x,y)))
-                        if pxc != pygame.Color(255,0,255):
-                            mix = 0.5
-                            pxc.r = int((mix*(player_col.r/255.0) + (1.0-mix)*(pxc.r/255.0)) * 255)
-                            pxc.g = int((mix*(player_col.g/255.0) + (1.0-mix)*(pxc.g/255.0)) * 255)
-                            pxc.b = int((mix*(player_col.b/255.0) + (1.0-mix)*(pxc.b/255.0)) * 255)
-                            s.set_at((x,y), pxc)
-                s.unlock()
+            if self.profile.color != (255,255,255):
+                for s in self.surfaces:
+                    s.lock()
+                    for y in xrange(s.get_height()):
+                        for x in xrange(s.get_width()):
+                            player_col = pygame.Color(
+                                self.profile.color[0],
+                                self.profile.color[1],
+                                self.profile.color[2],
+                                255
+                            )
+                            pxc = copy(s.get_at((x,y)))
+                            if pxc != pygame.Color(255,0,255):
+                                mix = 0.5
+                                pxc.r = int((mix*(player_col.r/255.0) + (1.0-mix)*(pxc.r/255.0)) * 255)
+                                pxc.g = int((mix*(player_col.g/255.0) + (1.0-mix)*(pxc.g/255.0)) * 255)
+                                pxc.b = int((mix*(player_col.b/255.0) + (1.0-mix)*(pxc.b/255.0)) * 255)
+                                s.set_at((x,y), pxc)
+                    s.unlock()
         
         self.frames = {
             "down": [0,1,2,1,3,4,5,4],
@@ -518,46 +528,47 @@ class Guy(Object):
         
         v = Vector2(0.0, 0.0)
         self.vel_intent = Vector2(0.0, 0.0)
-        if not self.frozen:
-            if self.profile.btn('left'):
-                v.x -= self.speed
-                self.state = "left"
-            elif self.profile.btn('right'):
-                v.x += self.speed
-                self.state = "right"
-            if self.profile.btn('up'):
-                v.y -= self.speed
-                self.state = "up"
-            elif self.profile.btn('down'):
-                v.y += self.speed
-                self.state = "down"
+        if not self.dummy:
+            if not self.frozen:
+                if self.profile.btn('left'):
+                    v.x -= self.speed
+                    self.state = "left"
+                elif self.profile.btn('right'):
+                    v.x += self.speed
+                    self.state = "right"
+                if self.profile.btn('up'):
+                    v.y -= self.speed
+                    self.state = "up"
+                elif self.profile.btn('down'):
+                    v.y += self.speed
+                    self.state = "down"
 
-            if self.curse == Curse.Slippery:
-                if v.magnitude() <= EPSILON:
-                    v = copy(self.last_vel_intent)
-            
-            if v.magnitude() >= EPSILON:
+                if self.curse == Curse.Slippery:
+                    if v.magnitude() <= EPSILON:
+                        v = copy(self.last_vel_intent)
                 
-                v.normalize()
-                v *= self.speed
-                
-                # collision
-                self.old_pos = copy(self.pos)
-                self.vel = v
-                self.vel_intent = copy(v)
-                self.last_vel_intent = copy(v)
-                
-                if abs(self.vel) >= EPSILON:
-                    self.pos += self.vel * t
-                    if self.snap():
-                        self.pos.x += self.vel.x * t
+                if v.magnitude() >= EPSILON:
+                    
+                    v.normalize()
+                    v *= self.speed
+                    
+                    # collision
+                    self.old_pos = copy(self.pos)
+                    self.vel = v
+                    self.vel_intent = copy(v)
+                    self.last_vel_intent = copy(v)
+                    
+                    if abs(self.vel) >= EPSILON:
+                        self.pos += self.vel * t
                         if self.snap():
-                            self.pos.y += self.vel.y * t
+                            self.pos.x += self.vel.x * t
                             if self.snap():
-                                self.vel = Vector2(0.0, 0.0)
-                
-        
-        self.vel = v
+                                self.pos.y += self.vel.y * t
+                                if self.snap():
+                                    self.vel = Vector2(0.0, 0.0)
+                    
+            
+            self.vel = v
 
         bad_objs = filter(lambda x: x.hurt, self.cols)
         if bad_objs:
@@ -629,19 +640,20 @@ class Guy(Object):
                             self.game.play(self.game.detonate_snd)
                             b.explode()
         
-        if self.vel.magnitude() > 0.0 or self.state == "death":
-            self.anim_point += t * self.anim_speed
-            if self.anim_point >= len(self.frames[self.state])-1:
-                if self.state == "death":
-                    self.attached = False
-                    return
+        if not SERVER:
+            if self.vel.magnitude() > 0.0 or self.state == "death":
+                self.anim_point += t * self.anim_speed
+                if self.anim_point >= len(self.frames[self.state])-1:
+                    if self.state == "death":
+                        self.attached = False
+                        return
+                    self.anim_point = 0.0
+                a = int(round(self.anim_point))
+                self.surface = self.surfaces[self.frames[self.state][a]]
+            else:
                 self.anim_point = 0.0
-            a = int(round(self.anim_point))
-            self.surface = self.surfaces[self.frames[self.state][a]]
-        else:
-            self.anim_point = 0.0
-            a = int(round(self.anim_point))
-            self.surface = self.surfaces[self.frames[self.state][a]]
+                a = int(round(self.anim_point))
+                self.surface = self.surfaces[self.frames[self.state][a]]
         
     def snap(self):
         objs = self.game.world.objects
@@ -790,7 +802,8 @@ class World:
         pass
         
     def render(self, view):
-
+        if SERVER:
+            return
         for obj in self.objects:
             obj.render(self.ofs - view)
 
@@ -986,6 +999,8 @@ class GameMode(Mode):
         self.world.objects.sort(cmp=render_order)
     
     def render(self):
+        if SERVER:
+            return
         self.game.screen.buf.fill((0,128,0))
         scr = self.game.screen
         f = self.game.font
@@ -999,6 +1014,8 @@ class GameMode(Mode):
         self.world.render((0.0, 0.0))
 
 def text_center(scr, font, text, n=1, col=(0xFF,0xFF,0xFF), pos=(0,0), shadow=None):
+    if SERVER:
+        return
     tx = font.render(text, n, col)
     if shadow:
         tx_s = font.render(text, n, (0,0,0))
@@ -1079,6 +1096,8 @@ class MenuMode(Mode):
             self.select()
     
     def render(self):
+        if SERVER:
+            return
         self.game.screen.buf.fill((0,128,0))
         scr = self.game.screen
         f = self.game.font
@@ -1180,8 +1199,9 @@ class Engine:
             self.logic(t)
             if self.done:
                 break
-            self.render()
-            self.draw()
+            if not SERVER:
+                self.render()
+                self.draw()
         
         return 0
        
@@ -1223,9 +1243,13 @@ class Engine:
         self.mode.logic(t)
     
     def render(self):
+        if SERVER:
+            return
         self.mode.render()
     
     def draw(self):
+        if SERVER:
+            return
         self.screen.render()
         pygame.display.flip()
 
