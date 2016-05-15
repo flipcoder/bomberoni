@@ -4,7 +4,6 @@ import os
 import sys
 import pygame
 from euclid import Vector2
-import pytmx
 from copy import copy
 import random
 import numpy
@@ -12,6 +11,9 @@ import math
 import weakref
 import six
 import enet
+import struct
+import string
+import time
 
 # random.seed()
 
@@ -73,7 +75,30 @@ class Signal:
                         return
                     continue
 
+def random_string(length):
+    return ''.join(random.choice(string.ascii_uppercase + string.digits) for _ in range(length))
+
 class Net:
+    class Event:
+        INFO = 0
+        MOVE = 1
+        PLANT = 2
+        TRIGGER = 3
+        DIE = 4
+        NEXT = 5
+
+    class Peer:
+        def __init__(self, peer):
+            self.peer = peer
+            self.uuid = random_string(8)
+            self.last_recv = time.time()
+
+        # def timeout(self):
+        #     return (time.time() - self.last_recv > 5.0)
+
+        def __str__(self):
+            return str(self.peer.address)
+
     def __init__(self):
         self.server = False
         try:
@@ -95,17 +120,57 @@ class Net:
         if self.server:
             self.host = enet.Host(enet.Address(b"localhost", 11523), 10, 0, 0, 0)
         if self.client:
-            self.host = enet.Host(None, 1, 0, 0, 0)
+            self.host = enet.Host(None, 1, 1, 0, 0)
             self.socket = self.host.connect(enet.Address(b"localhost", 11523), 1)
     
+        self.peers = []
+
+        self.on_connect = Signal()
+        self.on_disconnect = Signal()
+        self.on_packet = Signal()
+        
     def poll(self):
         event = self.host.service(1)
         if event.type == enet.EVENT_TYPE_CONNECT:
+            if self.server:
+                print "%s connected." % event.peer.host.address
+                self.peers += [Net.Peer(event.peer)]
+            else:
+                print "Connected."
             pass
+            self.on_connect(self.peer(event.peer))
         elif event.type == enet.EVENT_TYPE_DISCONNECT:
-            pass
+            self.on_disconnect(self.peer(event.peer))
+            if self.server:
+                print "%s disconnected." % event.peer.host.address
+                self.peers = filter(lambda x: x.peer != event.peer, self.peers)
+            else:
+                print "Disconnected."
         elif event.type == enet.EVENT_TYPE_RECEIVE:
-            pass
+            self.recv(self.peer(event.peer), event.data)
+        
+        # timeout clients
+        # self.timed_out = filter(lambda x: x.timeout(), self.peers)
+        # self.peers = filter(lambda x: not x.timeout(), self.peers)
+        # for peer in self.timed_out:
+        #     print "%s timed out." % peer
+    
+    def peer(self, peer):
+        for p in self.peers:
+            if p.peer == peer:
+                return p
+        return None
+    
+    def broadcast(self, ev, data, flags=0):
+        buf = struct.pack('H', ev)
+        buf += data
+        packet = enet.Packet(buf, flags)
+        self.host.broadcast(0, packet)
+
+    def recv(self, peer, buf):
+        ev = struct.unpack('H', buf[:4])
+        buf = buf[:4]
+        self.on_packet(ev, buf)
 
 net = Net()
 
@@ -1111,7 +1176,15 @@ class GameMode(Mode):
 class PregameMode(Mode):
     def __init__(self, game):
         self.game = game
-    
+        if net.client:
+            self.progress = "Connecting to %s..." % sys.argv[1]
+            net.on_connect(self.waiting)
+        else: 
+            self.progress = "Waiting for players..."
+
+    def waiting(self):
+        self.progress = "Waiting for more players..."
+        
     def logic(self, t):
         if net.online:
             net.poll()
@@ -1120,7 +1193,7 @@ class PregameMode(Mode):
         f = self.game.font
         self.game.screen.buf.fill((0,128,0))
         scr = self.game.screen
-        text(scr, f, "Connecting to %s..." % sys.argv[1])
+        text(scr, f, self.progress)
 
 def text(scr, font, text, n=1, col=(0xFF,0xFF,0xFF), pos=(0,0), shadow=None):
     if net.server:
