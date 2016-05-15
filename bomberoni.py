@@ -23,7 +23,7 @@ SCALE = 3
 TILE_SZ = 16
 TILE_SZ_T = (TILE_SZ*1.0,TILE_SZ*1.0)
 #SCREEN_SZ = (SCREEN_W, SCREEN_H)
-SCALED_SZ = (1024,768)
+SCALED_SZ = (800,600)
 SCREEN_SZ = (SCALED_SZ[0] // SCALE, SCALED_SZ[1] // SCALE)
 #SCALED_SZ = (SCREEN_W * SCALE, SCREEN_H * SCALE)
 FONT = './data/fonts/Early GameBoy.ttf'
@@ -31,6 +31,47 @@ TRANS = (255,0,255)
 EPSILON = 1 ** -4
 
 AXES = (0,1)
+
+class Signal:
+    def __init__(self):
+        self.slots = {}
+        self.meta = {}
+    def ensure(self, func, context=""):
+        if context not in self.slots:
+            self.connect(func, context)
+            return
+        if func not in self.slots[context]:
+            self.connect(func, context)
+    def connect(self, func, context="", hidden=False):
+        if context:
+            self.meta[context] = {
+                'hidden':  hidden
+            }
+        if context not in self.slots:
+            self.slots[context] = []
+        self.slots[context] += [func]
+    def clear(self):
+        self.slots = {}
+    def disconnect(self, context):
+        del self.slots[context]
+    def __call__(self, *args, **kwargs):
+        limit_context = kwargs.get("limit_context", None)
+        brk = kwargs.get("allow_break", False)
+        force_brk = kwargs.get("force_break", False)
+        include_context = kwargs.get("include_context", False)
+        for ctx, funcs in self.slots.items():
+            if not limit_context or ctx in limit_context:
+                for func in funcs:
+                    r = None
+                    if include_context:
+                        r = func(ctx, *args)
+                    else:
+                        r = func(*args)
+                    if brk and r:
+                        return
+                    if force_brk:
+                        return
+                    continue
 
 class Net:
     def __init__(self):
@@ -40,24 +81,25 @@ class Net:
         except:
             pass
 
-        client = False
-        try:
-            client = (len(sys.argv) >= 2)
-        except:
-            pass
+        self.client = False
+        if not self.server:
+            try:
+                self.client = sys.argv[1]
+            except:
+                pass
 
-        local = not self.server and not cilent
-        online = not local
+        self.local = not self.server and not self.client
+        self.online = not self.local
 
         self.socket = None
         if self.server:
-            self.socket = enet.Host(enet.Address(sys.argv[1], 11523), 10, 0, 0, 0)
+            self.host = enet.Host(enet.Address(b"localhost", 11523), 10, 0, 0, 0)
         if self.client:
-            host = enet.Host(None, 1, 0, 0, 0)
-            self.socket = host.connect(enet.Address(b"localhost", 11523), 1)
+            self.host = enet.Host(None, 1, 0, 0, 0)
+            self.socket = self.host.connect(enet.Address(b"localhost", 11523), 1)
     
     def poll(self):
-        event = self.socket.service(1)
+        event = self.host.service(1)
         if event.type == enet.EVENT_TYPE_CONNECT:
             pass
         elif event.type == enet.EVENT_TYPE_DISCONNECT:
@@ -71,6 +113,8 @@ def sgn(a):
     return (a > 0) - (a < 0)
 
 def load_image(fn):
+    if net and net.server:
+        return None
     img = pygame.image.load(fn).convert()
     img.set_colorkey(TRANS)
     return img
@@ -88,11 +132,6 @@ def tileset(fn, **kwargs):
         tiles[-1] = pygame.transform.flip(tiles[-1], hflip, vflip)
         tiles[-1].set_colorkey(TRANS)
     return tiles
-
-class Role:
-    Local = 0
-    Server = 1
-    Client = 2
 
 class Object(object):
     def __init__(self, **kwargs):
@@ -376,6 +415,9 @@ class Guy(Object):
         
         self.profile = kwargs.get('profile')
         self.dummy = kwargs.get("dummy", False)
+        self.on_give = Signal()
+        self.on_plant = Signal()
+        self.on_move = Signal()
 
         self.char = [
             'army',
@@ -421,7 +463,9 @@ class Guy(Object):
         self.normal_anim_speed = 12.0
         self.death_anim_speed = 12.0
         self.anim_speed = self.normal_anim_speed
-        self.surface = self.surfaces[self.frames[self.state][0]]
+        self.surface = None
+        if self.surfaces:
+            self.surface = self.surfaces[self.frames[self.state][0]]
         self.speed = Guy.SPEED
         self.origin = Vector2(TILE_SZ*.5,TILE_SZ*.75)
         self.solid = False
@@ -444,6 +488,7 @@ class Guy(Object):
         return self.radius
         
     def kill(self):
+        self.on_kill()
         self.frozen = True
         self.state = "death"
         self.anim_speed = 2.0
@@ -456,9 +501,9 @@ class Guy(Object):
         if self.curse_time <= 0.0:
             self.stop_curse()
     
-    def do_curse(self):
+    def do_curse(self, curse=0):
         self.stop_curse()
-        self.curse  = random.randint(1,Curse.Max-1)
+        self.curse  = random.randint(1,Curse.Max-1) if not curse else curse
         self.curse_time = 10.0
         if self.curse == Curse.Slow:
             self.speed = Guy.SPEED / 2.0
@@ -475,6 +520,7 @@ class Guy(Object):
             self.stop_curse() # no persist
     
     def stop_curse(self):
+        self.on_stop_curse()
         if not self.curse:
             return
         if self.curse == Curse.Slow:
@@ -483,6 +529,9 @@ class Guy(Object):
         self.curse_time = 0.0
 
     def give(self, item):
+        self.on_give(item)
+        if net.client:
+            return
         if item.item_id == Item.Bomb:
             self.bombs += 1
         elif item.item_id == Item.Kick:
@@ -502,6 +551,10 @@ class Guy(Object):
             self.game.world.objects) 
     
     def plant(self, ofs = Vector2()):
+        self.on_plant()
+        if net.client:
+            return None
+        
         if self.curse == Curse.NoPlant:
             return None
         
@@ -688,6 +741,8 @@ class Guy(Object):
                 self.anim_point = 0.0
                 a = int(round(self.anim_point))
                 self.surface = self.surfaces[self.frames[self.state][a]]
+
+        self.on_move()
         
     def snap(self):
         objs = self.game.world.objects
@@ -756,32 +811,34 @@ class World:
         s = sum(self.items_p)
         self.items_p = map(lambda x: x / s, self.items_p)
         
-        # random.seed(random.randint(0,999))
-        random.seed(0)
         
-        if net.local or net.server:
-            for j in range(0, self.h):
-                for i in range(0, self.w):
-                    if i==0 or j==0 or i==w-1 or j==h-1:
-                        obj = Wall(game=game, pos=(i*TILE_SZ*1.0, j*TILE_SZ*1.0), sz=TILE_SZ_T, surface=self.wall, solid=True)
-                        self.attach(obj)
-                    elif i%2==0 and j%2==0:
-                        obj = Wall(game=game, pos=(i*TILE_SZ*1.0, j*TILE_SZ*1.0), sz=TILE_SZ_T, surface=self.wall, solid=True)
-                        self.attach(obj)
-                    elif random.random() < 0.8:
-                        
-                        # don't sprinkle inside/around spawning area
-                        if i==1 and 1<=j<=3 or j==1 and 1<=i<=3:
-                            continue
-                        if i==w-2 and 1<=j<=3 or j==1 and w-4<=i<=w-2:
-                            continue
-                        if i==w-2 and h-4<=j<=h-2 or j==h-2 and w-4<=i<=w-2:
-                            continue
-                        if i==1 and h-4<=j<=h-2 or j==h-2 and 1<=i<=3:
-                            continue
-                        
-                        obj = Wall(game=game, pos=(i*TILE_SZ*1.0, j*TILE_SZ*1.0), sz=TILE_SZ_T,surface=self.bwall, solid=True, breakable=True)
-                        self.attach(obj)
+        if net.local:
+            random.seed()
+        else:
+            random.seed(0)
+        
+        for j in range(0, self.h):
+            for i in range(0, self.w):
+                if i==0 or j==0 or i==w-1 or j==h-1:
+                    obj = Wall(game=game, pos=(i*TILE_SZ*1.0, j*TILE_SZ*1.0), sz=TILE_SZ_T, surface=self.wall, solid=True)
+                    self.attach(obj)
+                elif i%2==0 and j%2==0:
+                    obj = Wall(game=game, pos=(i*TILE_SZ*1.0, j*TILE_SZ*1.0), sz=TILE_SZ_T, surface=self.wall, solid=True)
+                    self.attach(obj)
+                elif random.random() < 0.8:
+                    
+                    # don't sprinkle inside/around spawning area
+                    if i==1 and 1<=j<=3 or j==1 and 1<=i<=3:
+                        continue
+                    if i==w-2 and 1<=j<=3 or j==1 and w-4<=i<=w-2:
+                        continue
+                    if i==w-2 and h-4<=j<=h-2 or j==h-2 and w-4<=i<=w-2:
+                        continue
+                    if i==1 and h-4<=j<=h-2 or j==h-2 and 1<=i<=3:
+                        continue
+                    
+                    obj = Wall(game=game, pos=(i*TILE_SZ*1.0, j*TILE_SZ*1.0), sz=TILE_SZ_T,surface=self.bwall, solid=True, breakable=True)
+                    self.attach(obj)
         
         self.next_level = False
         
@@ -909,11 +966,11 @@ class Joystick(object):
             return False
         
 class Profile(object):
-    def __init__(self, game, num, joy=None):
+    def __init__(self, game, num, joy=None, client=None):
         self.game = game
         self.num = num
         self.score = 0
-        self.client = None
+        self.client = client
         #self.color = (0xFF, 0xFF, 0xFF)
         if num == 0:
             self.color = (0xFF, 0xFF, 0xFF)
@@ -981,17 +1038,16 @@ class Mode(object):
         pass
 
 class GameMode(Mode):
-    def __init__(self, game, role=Role.Local):
+    def __init__(self, game):
         self.game = game
-        self.role = role
         
         self.guys = []
         self.reset()
-
+ 
         self.game.play(self.game.play_snd)
 
     def reset(self):
-
+        
         self.world = World(self.game)
         
         for guy in self.guys:
@@ -1023,13 +1079,14 @@ class GameMode(Mode):
         self.world.logic()
 
         # end condition
-        guys_left = filter(lambda x: x.attached, self.guys)
-        guy_count = len(guys_left)
-        if guy_count == 0:
-            self.reset()
-        elif guy_count == 1:
-            guys_left[0].profile.score += 1
-            self.reset()
+        if not net.client:
+            guys_left = filter(lambda x: x.attached, self.guys)
+            guy_count = len(guys_left)
+            if guy_count == 0:
+                self.reset()
+            elif guy_count == 1:
+                guys_left[0].profile.score += 1
+                self.reset()
         
         self.clean()
         for obj in self.world.objects:
@@ -1050,6 +1107,39 @@ class GameMode(Mode):
             text_center(scr, f, str(p.score), col=p.color, n=0, pos=pos)
             i += 1
         self.world.render((0.0, 0.0))
+
+class PregameMode(Mode):
+    def __init__(self, game):
+        self.game = game
+    
+    def logic(self, t):
+        if net.online:
+            net.poll()
+            
+    def render(self):
+        f = self.game.font
+        self.game.screen.buf.fill((0,128,0))
+        scr = self.game.screen
+        text(scr, f, "Connecting to %s..." % sys.argv[1])
+
+def text(scr, font, text, n=1, col=(0xFF,0xFF,0xFF), pos=(0,0), shadow=None):
+    if net.server:
+        return
+    tx = font.render(text, n, col)
+    if shadow:
+        tx_s = font.render(text, n, (0,0,0))
+        scr.buf.blit(
+            tx_s,
+            (
+                shadow[0] + pos[0],
+                pos[1] + shadow[1]
+            )
+        )
+
+    scr.buf.blit(
+        tx, (pos[0], pos[1])
+    )
+
 
 def text_center(scr, font, text, n=1, col=(0xFF,0xFF,0xFF), pos=(0,0), shadow=None):
     if net.server:
@@ -1075,8 +1165,8 @@ class MenuMode(Mode):
         self.choice = 0
         self.ops = [
             "play",
-            "join",
-            "host",
+            # "join",
+            # "host",
             # text, current, min, max ([min,max])
             ["players: %s", 4, 2, 4],
             "quit"
@@ -1084,19 +1174,22 @@ class MenuMode(Mode):
         
     def select(self):
         if self.choice == 0:
-            self.game.mode = GameMode(self.game, role=Role.Local)
-        elif self.choice == 1:
-            #self.game.mode = GameMode(self.game, role=Role.Client)
-            pass
-        elif self.choice == 2:
-            #self.game.mode = GameMode(self.game, role=Role.Server)
-            pass
+            self.game.mode = GameMode(self.game)
+        # elif self.choice == 1:
+        #     #self.game.mode = GameMode(self.game)
+        #     pass
+        # elif self.choice == 2:
+        #     #self.game.mode = GameMode(self.game)
+        #     pass
         elif self.choice == 3:
             pass
         elif self.choice == 4:
             self.game.done = True
         
     def logic(self,t):
+        
+        if net.online:
+            net.poll()
         
         if ord(' ') in self.game.keys:
             self.select()
@@ -1197,7 +1290,9 @@ class Engine:
         self.profile_count(4)
         
         pygame.display.set_caption(TITLE)
-        self.screen = Screen(pygame.display.set_mode(SCALED_SZ, pygame.DOUBLEBUF), sz=SCREEN_SZ)
+        
+        if not net.server:
+            self.screen = Screen(pygame.display.set_mode(SCALED_SZ, pygame.DOUBLEBUF), sz=SCREEN_SZ)
         self.font_size = SCALED_SZ[0]/100
         self.font = pygame.font.Font(FONT, self.font_size)
         self.clock = pygame.time.Clock()
@@ -1207,15 +1302,21 @@ class Engine:
         else:
             self.level = 1
         
-        self.mode = MenuMode(self)
+        if not net.server:
+            self.chans = []
+            for cid in range(8):
+                self.chans += [pygame.mixer.Channel(cid)]
+            
+            self.next_chan = 0
         
-        self.chans = []
-        for cid in range(8):
-            self.chans += [pygame.mixer.Channel(cid)]
-        
-        self.next_chan = 0
+        if net.local:
+            self.mode = MenuMode(self)
+        else:
+            self.mode = PregameMode(self)
 
     def play(self,snd):
+        if net.server:
+            return
         self.chans[self.next_chan].play(snd)
         self.next_chan += 1
         self.next_chan %= len(self.chans)
@@ -1244,9 +1345,6 @@ class Engine:
         return 0
        
     def logic(self, t):
-        
-        if ONLINE:
-            net.poll()
         
         for ev in pygame.event.get():
             if ev.type == pygame.QUIT:
