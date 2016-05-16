@@ -55,15 +55,21 @@ class Signal:
     def clear(self):
         self.slots = {}
     def disconnect(self, context):
-        del self.slots[context]
+        try:
+            del self.slots[context]
+            return True
+        except KeyError:
+            return False
     def __call__(self, *args, **kwargs):
         limit_context = kwargs.get("limit_context", None)
         brk = kwargs.get("allow_break", False)
         force_brk = kwargs.get("force_break", False)
         include_context = kwargs.get("include_context", False)
-        for ctx, funcs in self.slots.items():
+        items_copy = copy(self.slots.items())
+        for ctx, funcs in items_copy:
             if not limit_context or ctx in limit_context:
-                for func in funcs:
+                funcs_copy = copy(funcs)
+                for func in funcs_copy:
                     r = None
                     if include_context:
                         r = func(ctx, *args)
@@ -73,7 +79,6 @@ class Signal:
                         return
                     if force_brk:
                         return
-                    continue
 
 def random_string(length):
     return ''.join(random.choice(string.ascii_uppercase + string.digits) for _ in range(length))
@@ -88,6 +93,7 @@ class Net:
         NEXT = 5
         GIVE = 6
         SPAWN = 7
+        MULTIPLANT = 8
 
     class Peer:
         def __init__(self, peer, player_id=-1):
@@ -394,6 +400,11 @@ class Bomb(Object):
     def __init__(self, fast=False, modern=False, **kwargs):
         super(self.__class__, self).__init__(**kwargs)
         
+        # if net.client:
+            # import traceback
+            # traceback.print_stack()
+            # print self.pos
+        
         self.modern = modern
         
         if not net.server:
@@ -517,15 +528,20 @@ class Guy(Object):
         self.dummy = self.profile.dummy
         self.on_give = Signal()
         self.on_plant = Signal()
+        self.on_multiplant = Signal()
         self.on_move = Signal()
         self.on_kill = Signal()
+        self.on_stop_curse = Signal()
+        self.on_trigger = Signal()
 
         if net.online:
-            net.on_packet.connect(self.event)
+            net.on_packet.connect(self.event, "guy" + str(self.profile.num))
             if net.server:
                 self.on_give.connect(self.send_give)
                 self.on_kill.connect(self.send_kill)
             if not self.dummy:
+                self.on_trigger.connect(self.send_trigger)
+                self.on_multiplant.connect(self.send_multiplant)
                 self.on_move.connect(self.send_move)
                 self.on_plant.connect(self.send_plant)
 
@@ -615,7 +631,7 @@ class Guy(Object):
         elif ev == Net.Event.PLANT:
             if net.server:
                 if peer.player_id == self.profile.num:
-                    self.plant(Vector2(), True)
+                    self.plant(Vector2(), True, True)
                     net.broadcast(Net.Event.PLANT,
                         struct.pack('B',peer.player_id),
                         enet.PACKET_FLAG_RELIABLE)
@@ -633,6 +649,27 @@ class Guy(Object):
                 (profile_num,) = struct.unpack('B',data[:1])
                 if profile_num == self.profile.num:
                     self.kill()
+        elif ev == Net.Event.TRIGGER:
+            if net.server:
+                if peer.player_id == self.profile.num:
+                    self.trigger(True, True)
+                    net.broadcast(Net.Event.TRIGGER,
+                        "", enet.PACKET_FLAG_RELIABLE)
+            else:
+                (profile_num,) = struct.unpack('B',data[:1])
+                if profile_num == self.profile.num:
+                    self.trigger(True, True)
+        elif ev == Net.Event.MULTIPLANT:
+            if net.server:
+                if peer.player_id == self.profile.num:
+                    self.multiplant(True, True)
+                    net.broadcast(Net.Event.MULTIPLANT,
+                        "", enet.PACKET_FLAG_RELIABLE)
+            else:
+                (profile_num,) = struct.unpack('B',data[:1])
+                if profile_num == self.profile.num:
+                    self.multiplant(True, True)
+
 
     def set_direction(self, vel):
         if vel.x < -0.01:
@@ -643,6 +680,16 @@ class Guy(Object):
             self.state = "up"
         elif vel.y > 0.01:
             self.state = "down"
+    
+    def send_trigger(self):
+        if self.dummy:
+            return
+        net.broadcast(Net.Event.TRIGGER, "", enet.PACKET_FLAG_RELIABLE)
+
+    def send_multiplant(self):
+        if self.dummy:
+            return
+        net.broadcast(Net.Event.MULTIPLANT, "", enet.PACKET_FLAG_RELIABLE)
     
     def send_move(self):
         if not self.dummy:
@@ -680,6 +727,9 @@ class Guy(Object):
         self.state = "death"
         self.anim_speed = 2.0
         self.game.play(self.game.death_snd)
+        net.on_packet.disconnect("guy" + str(self.profile.num))
+        if net.server:
+            self.attached = False
     
     def curse_logic(self,t):
         if not self.curse:
@@ -762,11 +812,11 @@ class Guy(Object):
             fast=(self.curse==Curse.FastBomb),modern=self.remote,
             game=self.game, pos=p, sz=TILE_SZ_T, solid=True, owner=self)
 
+        if not mute:
+            self.on_plant()
         if net.client and not force:
-            if not mute:
-                self.on_plant()
             return self.game.world.can_place(b)
-        
+
         r = self.game.world.place(b)
         if r:
             #self.last_bomb = weakref.ref(b)
@@ -785,8 +835,12 @@ class Guy(Object):
         except KeyError:
             return None
         
-    def multiplant(self):
-        self.on_multiplant()
+    def multiplant(self, mute=False, force=False):
+        if not mute:
+            self.on_multiplant()
+        if net.client and not force:
+            return
+        
         if self.curse == Curse.NoPlant:
             return None
         
@@ -799,6 +853,32 @@ class Guy(Object):
             ofs += d
             i += 1
         return i > 0
+    
+    def trigger(self, mute=False, force=False):
+        if not mute:
+            self.on_trigger()
+        if net.client and not force:
+            return
+        
+        my_bombs = self.get_my_bombs()
+
+        stopped_bomb = False
+        for b in my_bombs:
+            if b.vel.magnitude() > EPSILON:
+                self.profile.btn(1, consume=True)
+                # stop a moving bomb
+                self.game.play(self.game.kick_snd)
+                b.vel = Vector2()
+                b.snap()
+                stopped_bomb = True
+        
+        if not stopped_bomb:
+            for b in my_bombs:
+                if self.remote:
+                    self.profile.btn(1, consume=True)
+                    # already stopped and have remote? detonate!
+                    self.game.play(self.game.detonate_snd)
+                    b.explode()
     
     def logic(self, t):
 
@@ -906,25 +986,7 @@ class Guy(Object):
                 #if self.last_bomb:
                 #    b = self.last_bomb()
                 #    if b:
-                my_bombs = self.get_my_bombs()
-
-                stopped_bomb = False
-                for b in my_bombs:
-                    if b.vel.magnitude() > EPSILON:
-                        self.profile.btn(1, consume=True)
-                        # stop a moving bomb
-                        self.game.play(self.game.kick_snd)
-                        b.vel = Vector2()
-                        b.snap()
-                        stopped_bomb = True
-                
-                if not stopped_bomb:
-                    for b in my_bombs:
-                        if self.remote:
-                            self.profile.btn(1, consume=True)
-                            # already stopped and have remote? detonate!
-                            self.game.play(self.game.detonate_snd)
-                            b.explode()
+                self.trigger()
         
         if not net.server:
             if self.vel.magnitude() > 0.0 or self.state == "death":
@@ -1261,7 +1323,7 @@ class GameMode(Mode):
         self.game.play(self.game.play_snd)
 
         if net.client:
-            net.on_packet.connect(self.event)
+            net.on_packet.connect(self.event, "game")
 
     def event(self, ev, data, peer):
         if ev == Net.Event.SPAWN:
@@ -1274,12 +1336,13 @@ class GameMode(Mode):
             (_, seed, player_score) = struct.unpack('BBB', data)
             net.seed = seed
             if player_score != 0xFF:
-                self.profiles[player_score].score += 1
+                self.game.profiles[player_score].score += 1
             self.reset()
 
     def on_reset(self, player_score = 0xFF):
         if not net.server:
             return
+        print 'reseting'
         net.generate_seed()
         net.broadcast(
             Net.Event.NEXT,
@@ -1360,7 +1423,7 @@ class PregameMode(Mode):
         self.game = game
         if net.client:
             self.progress = "Connecting to %s..." % sys.argv[1]
-            net.on_packet.connect(self.event)
+            net.on_packet.connect(self.event, "pregame")
         else: 
             self.game.init_profiles(0)
             net.on_connect.connect(self.connect)
@@ -1384,6 +1447,7 @@ class PregameMode(Mode):
                 enet.PACKET_FLAG_RELIABLE
             )
             self.game.mode = GameMode(self.game)
+            net.on_packet.disconnect("pregame")
         
     def logic(self, t):
         if net.online:
@@ -1406,7 +1470,6 @@ class PregameMode(Mode):
             tup = struct.unpack('B', buf[:1])
             buf = buf[1:]
             self.player_id = tup[0]
-            
 
 def text(scr, font, text, n=1, col=(0xFF,0xFF,0xFF), pos=(0,0), shadow=None):
     if net.server:
