@@ -87,6 +87,7 @@ class Net:
         KILL = 4
         NEXT = 5
         GIVE = 6
+        SPAWN = 7
 
     class Peer:
         def __init__(self, peer, player_id=-1):
@@ -327,10 +328,18 @@ class Wall(Object):
     
     def explode(self):
         if self.breakable:
-            item = self.game.world.random_item(game=self.game, pos=self.pos, sz=TILE_SZ_T, solid=False)
-            if item:
-                self.game.world.attach(item)
+            if not net.client:
+                item = self.game.world.random_item(game=self.game, pos=self.pos, sz=TILE_SZ_T, solid=False)
+                if item:
+                    if net.server:
+                        self.send(item)
+                    self.game.world.attach(item)
             self.attached = False
+
+    def send(self, item):
+        net.broadcast(Net.Event.SPAWN,
+            struct.pack('Bff',item.item_id,item.pos.x,item.pos.y),
+            enet.PACKET_FLAG_RELIABLE)
 
 class Screen(Object):
     def __init__(self,screen,**kwargs):
@@ -616,9 +625,9 @@ class Guy(Object):
                     self.plant(Vector2(), True, True)
         elif ev == Net.Event.GIVE:
             if net.client:
-                (profile_num,item,) = struct.unpack('BB',data[:2])
+                (profile_num,item,curse,) = struct.unpack('BBB',data[:3])
                 if profile_num == self.profile.num:
-                    self.give(item, True, True)
+                    self.give(item, 0, True, True)
         elif ev == Net.Event.KILL:
             if net.client:
                 (profile_num,) = struct.unpack('B',data[:1])
@@ -650,9 +659,9 @@ class Guy(Object):
             return
         net.broadcast(Net.Event.PLANT, "", enet.PACKET_FLAG_RELIABLE)
 
-    def send_give(self, item):
+    def send_give(self, item, curse):
         net.broadcast(Net.Event.GIVE,
-            struct.pack('BB',self.profile.num, item),
+            struct.pack('BBB',self.profile.num, item, curse),
             enet.PACKET_FLAG_RELIABLE)
         
     def send_kill(self):
@@ -678,6 +687,9 @@ class Guy(Object):
         self.curse_time -= t
         if self.curse_time <= 0.0:
             self.stop_curse()
+    
+    def random_curse(self):
+        return random.randint(1,Curse.Max-1)
     
     def do_curse(self, curse=0):
         self.stop_curse()
@@ -706,9 +718,9 @@ class Guy(Object):
         self.curse = None
         self.curse_time = 0.0
 
-    def give(self, item, mute=False, force=False):
+    def give(self, item, curse=0, mute=False, force=False):
         if not mute:
-            self.on_give(item)
+            self.on_give(item,curse)
         if net.client and not force:
             return
         self.game.play(self.game.item_snd)
@@ -719,7 +731,9 @@ class Guy(Object):
         elif item == Item.Multi:
             self.multi = True
         elif item == Item.Curse:
-            self.do_curse()
+            if net.server:
+                curse = self.random_curse()
+            self.do_curse(curse)
         elif item == Item.Flame:
             self.radius += 1
         elif item == Item.Remote:
@@ -1246,6 +1260,33 @@ class GameMode(Mode):
  
         self.game.play(self.game.play_snd)
 
+        if net.client:
+            net.on_packet.connect(self.event)
+
+    def event(self, ev, data, peer):
+        if ev == Net.Event.SPAWN:
+            pos = Vector2()
+            (item_id, pos.x, pos.y) = struct.unpack('Bff', data)
+            self.world.attach(self.world.items[item_id](
+                game=self.game, pos=pos, sz=TILE_SZ_T, solid=False
+            ))
+        elif ev == Net.Event.NEXT:
+            (_, seed, player_score) = struct.unpack('BBB', data)
+            net.seed = seed
+            if player_score != 0xFF:
+                self.profiles[player_score].score += 1
+            self.reset()
+
+    def on_reset(self, player_score = 0xFF):
+        if not net.server:
+            return
+        net.generate_seed()
+        net.broadcast(
+            Net.Event.NEXT,
+            struct.pack('BBB',self.game.num_profiles(), net.seed, player_score),
+            enet.PACKET_FLAG_RELIABLE
+        )
+
     def reset(self):
         
         self.world = World(self.game)
@@ -1286,9 +1327,11 @@ class GameMode(Mode):
             guys_left = filter(lambda x: x.attached, self.guys)
             guy_count = len(guys_left)
             if guy_count == 0:
+                self.on_reset()
                 self.reset()
             elif guy_count == 1:
                 guys_left[0].profile.score += 1
+                self.on_reset(guys_left[0].profile.num)
                 self.reset()
         
         self.clean()
@@ -1334,9 +1377,10 @@ class PregameMode(Mode):
         if self.game.full():
             # send game start message, and go!
             net.generate_seed()
+            player_score = 0xFF
             net.broadcast(
                 Net.Event.NEXT,
-                struct.pack('BB',self.game.num_profiles(), net.seed),
+                struct.pack('BBB',self.game.num_profiles(), net.seed, player_score),
                 enet.PACKET_FLAG_RELIABLE
             )
             self.game.mode = GameMode(self.game)
@@ -1353,8 +1397,9 @@ class PregameMode(Mode):
 
     def event(self, ev, buf, peer):
         if ev == Net.Event.NEXT:
-            tup = struct.unpack('BB', buf[:2])
+            tup = struct.unpack('BBB', buf[:3])
             net.seed = tup[1]
+            # player_score = tup[2]
             self.game.init_online_profile(tup[0], self.player_id)
             self.game.mode = GameMode(self.game)
         elif ev == Net.Event.INFO:
@@ -1619,8 +1664,8 @@ class Engine:
             elif ev.type == pygame.KEYDOWN:
                 if ev.key == pygame.K_ESCAPE:
                     self.done = True
-                elif ev.key == pygame.K_r:
-                    self.reset()
+                # elif ev.key == pygame.K_r:
+                #     self.reset()
                 if ev.key not in self.keys:
                     self.keys += [ev.key]
                 if ev.key == pygame.K_PAGEUP:
