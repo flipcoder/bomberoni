@@ -84,8 +84,9 @@ class Net:
         MOVE = 1
         PLANT = 2
         TRIGGER = 3
-        DIE = 4
+        KILL = 4
         NEXT = 5
+        GIVE = 6
 
     class Peer:
         def __init__(self, peer, player_id=-1):
@@ -512,6 +513,9 @@ class Guy(Object):
 
         if net.online:
             net.on_packet.connect(self.event)
+            if net.server:
+                self.on_give.connect(self.send_give)
+                self.on_kill.connect(self.send_kill)
             if not self.dummy:
                 self.on_move.connect(self.send_move)
                 self.on_plant.connect(self.send_plant)
@@ -587,7 +591,7 @@ class Guy(Object):
                 if peer.player_id == self.profile.num:
                     (
                         self.pos.x, self.pos.y,
-                        vx, vy
+                        self.vel.x, self.vel.y
                     ) = struct.unpack('ffff',data)
                     net.broadcast(Net.Event.MOVE,
                         struct.pack('B', peer.player_id) + data, 0)
@@ -596,8 +600,9 @@ class Guy(Object):
                 if profile_num == self.profile.num:
                     (
                         self.pos.x, self.pos.y,
-                        self.vel.x, self.vel.y,
+                        self.vel.x, self.vel.y
                     ) = struct.unpack('ffff',data[1:])
+                    self.set_direction(self.vel)
         elif ev == Net.Event.PLANT:
             if net.server:
                 if peer.player_id == self.profile.num:
@@ -609,10 +614,27 @@ class Guy(Object):
                 (profile_num,) = struct.unpack('B',data[:1])
                 if profile_num == self.profile.num:
                     self.plant(Vector2(), True, True)
-                # (profile_num,) = struct.unpack('B',data[:1])
-                # if profile_num == self.profile.num:
-                #     self.plant()
+        elif ev == Net.Event.GIVE:
+            if net.client:
+                (profile_num,item,) = struct.unpack('BB',data[:2])
+                if profile_num == self.profile.num:
+                    self.give(item, True, True)
+        elif ev == Net.Event.KILL:
+            if net.client:
+                (profile_num,) = struct.unpack('B',data[:1])
+                if profile_num == self.profile.num:
+                    self.kill()
 
+    def set_direction(self, vel):
+        if vel.x < -0.01:
+            self.state = "left"
+        elif vel.x > 0.01:
+            self.state = "right"
+        elif vel.y < -0.01:
+            self.state = "up"
+        elif vel.y > 0.01:
+            self.state = "down"
+    
     def send_move(self):
         if not self.dummy:
             if self.vel or self.last_sent_vel: # moving or just stopped
@@ -627,7 +649,17 @@ class Guy(Object):
         if self.dummy:
             return
         net.broadcast(Net.Event.PLANT, "", enet.PACKET_FLAG_RELIABLE)
-    
+
+    def send_give(self, item):
+        net.broadcast(Net.Event.GIVE,
+            struct.pack('BB',self.profile.num, item),
+            enet.PACKET_FLAG_RELIABLE)
+        
+    def send_kill(self):
+        net.broadcast(Net.Event.KILL,
+            struct.pack('B',self.profile.num),
+            enet.PACKET_FLAG_RELIABLE)
+        
     def get_radius(self):
         if self.curse == Curse.SmallBlast:
             return 1
@@ -674,21 +706,23 @@ class Guy(Object):
         self.curse = None
         self.curse_time = 0.0
 
-    def give(self, item, force=False):
-        self.on_give(item)
+    def give(self, item, mute=False, force=False):
+        if not mute:
+            self.on_give(item)
         if net.client and not force:
             return
-        if item.item_id == Item.Bomb:
+        self.game.play(self.game.item_snd)
+        if item == Item.Bomb:
             self.bombs += 1
-        elif item.item_id == Item.Kick:
+        elif item == Item.Kick:
             self.kick = True
-        elif item.item_id == Item.Multi:
+        elif item == Item.Multi:
             self.multi = True
-        elif item.item_id == Item.Curse:
+        elif item == Item.Curse:
             self.do_curse()
-        elif item.item_id == Item.Flame:
+        elif item == Item.Flame:
             self.radius += 1
-        elif item.item_id == Item.Remote:
+        elif item == Item.Remote:
             self.remote = True
     
     def get_my_bombs(self):
@@ -696,7 +730,7 @@ class Guy(Object):
             x.attached and isinstance(x, Bomb) and x.owner and x.owner()==self,
             self.game.world.objects) 
     
-    def plant(self, ofs = Vector2(), mute_callback=False, force=False):
+    def plant(self, ofs = Vector2(), mute=False, force=False):
         
         if self.curse == Curse.NoPlant:
             return None
@@ -715,7 +749,7 @@ class Guy(Object):
             game=self.game, pos=p, sz=TILE_SZ_T, solid=True, owner=self)
 
         if net.client and not force:
-            if not mute_callback:
+            if not mute:
                 self.on_plant()
             return self.game.world.can_place(b)
         
@@ -807,12 +841,12 @@ class Guy(Object):
         bad_objs = filter(lambda x: x.hurt, self.cols)
         if bad_objs:
             self.frozen = True
-            self.kill()
+            if not net.client:
+                self.kill()
 
         for col in self.cols:
             if isinstance(col, Item):
-                self.game.play(self.game.item_snd)
-                self.give(col)
+                self.give(col.item_id)
                 col.attached = False
 
         for col in self.snapped_cols:
