@@ -101,6 +101,8 @@ class Net:
 
     def __init__(self):
         self.server = False
+        self.generate_seed()
+        random.randint(0,255)
         try:
             self.server = (sys.argv[1] == '-s')
         except:
@@ -128,9 +130,12 @@ class Net:
         self.on_connect = Signal()
         self.on_disconnect = Signal()
         self.on_packet = Signal()
+
+    def generate_seed(self):
+        self.seed = random.randint(0,255)
         
     def poll(self):
-        event = self.host.service(10)
+        event = self.host.service(1)
         if event.type == enet.EVENT_TYPE_CONNECT:
             if self.server:
                 print "%s connected." % event.peer.host.address
@@ -288,8 +293,9 @@ class Item(Object):
         super(self.__class__, self).__init__(**kwargs)
         
         if isinstance(self.surface, list):
-            self.surfaces = self.surface
-            self.surface = self.surfaces[0]
+            if not net.server:
+                self.surfaces = self.surface
+                self.surface = self.surfaces[0]
             self.animate = True
             self.anim_point = 0.0
             self.anim_speed = 4.0
@@ -306,12 +312,13 @@ class Item(Object):
         self.life = math.fmod(self.life + t, bobspeed)
         self.ofs = Vector2(0.0, math.sin(self.life*bobspeed*2.0*math.pi))
 
-        if self.animate:
+        if not net.server and self.animate:
             self.anim_point += t * self.anim_speed
             if self.anim_point >= len(self.surfaces)-1:
                 self.anim_point = 0.0
             a = int(round(self.anim_point))
-            self.surface = self.surfaces[a]
+            if not net.server:
+                self.surface = self.surfaces[a]
     
 class Wall(Object):
     def __init__(self, **kwargs):
@@ -350,7 +357,8 @@ class Splode(Object):
             "default": [0,1,2,3,4,5]
         }
         self.state = "default"
-        self.surface = self.surfaces[self.frames[self.state][0]]
+        if not net.server:
+            self.surface = self.surfaces[self.frames[self.state][0]]
         self.solid = False
         self.hurt = True
 
@@ -369,7 +377,8 @@ class Splode(Object):
         a = int(round(self.anim_point))
         if a > 3: # smoke frames no longer damage
             self.hurt = False
-        self.surface = self.surfaces[self.frames[self.state][a]]
+        if not net.server:
+            self.surface = self.surfaces[self.frames[self.state][a]]
     
 class Bomb(Object):
     def __init__(self, fast=False, modern=False, **kwargs):
@@ -377,10 +386,11 @@ class Bomb(Object):
         
         self.modern = modern
         
-        if modern:
-            self.surfaces = self.game.world.bomb_modern
-        else:
-            self.surfaces = self.game.world.bomb
+        if not net.server:
+            if modern:
+                self.surfaces = self.game.world.bomb_modern
+            else:
+                self.surfaces = self.game.world.bomb
         
         self.anim_point = 0.0
         self.anim_speed = 4.0
@@ -388,7 +398,8 @@ class Bomb(Object):
             "default": [0,1]
         }
         self.state = "default"
-        self.surface = self.surfaces[self.frames[self.state][0]]
+        if not net.server:
+            self.surface = self.surfaces[self.frames[self.state][0]]
         self.breakable = True
 
         self.life = 2.5
@@ -470,7 +481,9 @@ class Bomb(Object):
         if self.anim_point >= len(self.frames[self.state])-1:
             self.anim_point = 0.0
         a = int(round(self.anim_point))
-        self.surface = self.surfaces[self.frames[self.state][a]]
+        
+        if not net.server:
+            self.surface = self.surfaces[self.frames[self.state][a]]
         
 class Curse:
     NoCurse = 0
@@ -495,10 +508,13 @@ class Guy(Object):
         self.on_give = Signal()
         self.on_plant = Signal()
         self.on_move = Signal()
+        self.on_kill = Signal()
 
         if net.online:
             net.on_packet.connect(self.event)
-            self.on_move.connect(self.send_move)
+            if not self.dummy:
+                self.on_move.connect(self.send_move)
+                self.on_plant.connect(self.send_plant)
 
         self.char = [
             'army',
@@ -562,16 +578,19 @@ class Guy(Object):
         self.curse = None
         self.last_vel_intent = Vector2()
         self.old_pos = self.pos
+        
+        self.last_sent_vel = Vector2()
 
     def event(self, ev, data, peer):
         if ev == Net.Event.MOVE:
             if net.server:
-                (
-                    self.pos.x, self.pos.y,
-                    vx, vy
-                ) = struct.unpack('ffff',data)
-                net.broadcast(Net.Event.MOVE,
-                    struct.pack('B', peer.player_id) + data, 0)
+                if peer.player_id == self.profile.num:
+                    (
+                        self.pos.x, self.pos.y,
+                        vx, vy
+                    ) = struct.unpack('ffff',data)
+                    net.broadcast(Net.Event.MOVE,
+                        struct.pack('B', peer.player_id) + data, 0)
             elif self.dummy:
                 (profile_num,) = struct.unpack('B',data[:1])
                 if profile_num == self.profile.num:
@@ -579,14 +598,35 @@ class Guy(Object):
                         self.pos.x, self.pos.y,
                         self.vel.x, self.vel.y,
                     ) = struct.unpack('ffff',data[1:])
+        elif ev == Net.Event.PLANT:
+            if net.server:
+                if peer.player_id == self.profile.num:
+                    self.plant(Vector2(), True)
+                    net.broadcast(Net.Event.PLANT,
+                        struct.pack('B',peer.player_id),
+                        enet.PACKET_FLAG_RELIABLE)
+            else:
+                (profile_num,) = struct.unpack('B',data[:1])
+                if profile_num == self.profile.num:
+                    self.plant(Vector2(), True, True)
+                # (profile_num,) = struct.unpack('B',data[:1])
+                # if profile_num == self.profile.num:
+                #     self.plant()
 
     def send_move(self):
-        if not self.dummy and self.vel:
-            data = struct.pack(
-                'ffff',
-                self.pos.x, self.pos.y, self.vel.x, self.vel.y
-            )
-            net.broadcast(Net.Event.MOVE, data, 0)
+        if not self.dummy:
+            if self.vel or self.last_sent_vel: # moving or just stopped
+                data = struct.pack(
+                    'ffff',
+                    self.pos.x, self.pos.y, self.vel.x, self.vel.y
+                )
+                net.broadcast(Net.Event.MOVE, data, 0)
+                self.last_sent_vel = self.vel
+    
+    def send_plant(self):
+        if self.dummy:
+            return
+        net.broadcast(Net.Event.PLANT, "", enet.PACKET_FLAG_RELIABLE)
     
     def get_radius(self):
         if self.curse == Curse.SmallBlast:
@@ -634,9 +674,9 @@ class Guy(Object):
         self.curse = None
         self.curse_time = 0.0
 
-    def give(self, item):
+    def give(self, item, force=False):
         self.on_give(item)
-        if net.client:
+        if net.client and not force:
             return
         if item.item_id == Item.Bomb:
             self.bombs += 1
@@ -656,10 +696,7 @@ class Guy(Object):
             x.attached and isinstance(x, Bomb) and x.owner and x.owner()==self,
             self.game.world.objects) 
     
-    def plant(self, ofs = Vector2()):
-        self.on_plant()
-        if net.client:
-            return None
+    def plant(self, ofs = Vector2(), mute_callback=False, force=False):
         
         if self.curse == Curse.NoPlant:
             return None
@@ -676,6 +713,12 @@ class Guy(Object):
         b = Bomb(
             fast=(self.curse==Curse.FastBomb),modern=self.remote,
             game=self.game, pos=p, sz=TILE_SZ_T, solid=True, owner=self)
+
+        if net.client and not force:
+            if not mute_callback:
+                self.on_plant()
+            return self.game.world.can_place(b)
+        
         r = self.game.world.place(b)
         if r:
             #self.last_bomb = weakref.ref(b)
@@ -695,6 +738,7 @@ class Guy(Object):
             return None
         
     def multiplant(self):
+        self.on_multiplant()
         if self.curse == Curse.NoPlant:
             return None
         
@@ -703,7 +747,7 @@ class Guy(Object):
             return False
         ofs = copy(d)
         i = 0
-        while self.plant(ofs):
+        while self.plant(ofs, True): # dont trigger callback
             ofs += d
             i += 1
         return i > 0
@@ -918,11 +962,10 @@ class World:
         s = sum(self.items_p)
         self.items_p = map(lambda x: x / s, self.items_p)
         
-        
         if net.local:
             random.seed()
         else:
-            random.seed(0)
+            random.seed(net.seed)
         
         for j in range(0, self.h):
             for i in range(0, self.w):
@@ -953,6 +996,18 @@ class World:
         if not obj.attached:
             self.objects += [obj]
             obj.attached = True
+        
+    def can_place(self, obj):
+        if not obj.attached:
+            objs = self.objects
+            
+            objs = filter(lambda x: x.solid, objs)
+            objs = map(lambda x: x.mask(), objs)
+            
+            if -1 != obj.mask().collidelist(objs):
+                return False
+            
+            return True
         
     def place(self, obj):
         if not obj.attached:
@@ -1244,9 +1299,11 @@ class PregameMode(Mode):
             assert False # TEMP
         if self.game.full():
             # send game start message, and go!
+            net.generate_seed()
             net.broadcast(
                 Net.Event.NEXT,
-                struct.pack('B',self.game.num_profiles()), enet.PACKET_FLAG_RELIABLE
+                struct.pack('BB',self.game.num_profiles(), net.seed),
+                enet.PACKET_FLAG_RELIABLE
             )
             self.game.mode = GameMode(self.game)
         
@@ -1262,7 +1319,8 @@ class PregameMode(Mode):
 
     def event(self, ev, buf, peer):
         if ev == Net.Event.NEXT:
-            tup = struct.unpack('B', buf[:1])
+            tup = struct.unpack('BB', buf[:2])
+            net.seed = tup[1]
             self.game.init_online_profile(tup[0], self.player_id)
             self.game.mode = GameMode(self.game)
         elif ev == Net.Event.INFO:
