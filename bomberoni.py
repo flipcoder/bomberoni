@@ -135,19 +135,24 @@ class Net:
             if self.server:
                 print "%s connected." % event.peer.host.address
                 self.peers += [Net.Peer(event.peer)]
+                self.on_connect(self.peer(event.peer))
             else:
+                self.on_connect()
                 print "Connected."
             pass
-            self.on_connect(self.peer(event.peer))
         elif event.type == enet.EVENT_TYPE_DISCONNECT:
-            self.on_disconnect(self.peer(event.peer))
             if self.server:
                 print "%s disconnected." % event.peer.host.address
                 self.peers = filter(lambda x: x.peer != event.peer, self.peers)
+                self.on_disconnect(self.peer(event.peer))
             else:
                 print "Disconnected."
+                self.on_disconnect()
         elif event.type == enet.EVENT_TYPE_RECEIVE:
-            self.recv(self.peer(event.peer), event.data)
+            if self.server:
+                self.recv(event.packet.data, self.peer(event.peer))
+            else:
+                self.recv(event.packet.data, None)
         
         # timeout clients
         # self.timed_out = filter(lambda x: x.timeout(), self.peers)
@@ -159,7 +164,14 @@ class Net:
         for p in self.peers:
             if p.peer == peer:
                 return p
+        assert False
         return None
+
+    def send(self, peer, ev, data, flags=0):
+        buf = struct.pack('H', ev)
+        buf += data
+        packet = enet.Packet(buf, flags)
+        peer.peer.send(0, packet)
     
     def broadcast(self, ev, data, flags=0):
         buf = struct.pack('H', ev)
@@ -167,10 +179,10 @@ class Net:
         packet = enet.Packet(buf, flags)
         self.host.broadcast(0, packet)
 
-    def recv(self, peer, buf):
-        ev = struct.unpack('H', buf[:4])
-        buf = buf[:4]
-        self.on_packet(ev, buf)
+    def recv(self, buf, peer):
+        tup = struct.unpack('H', buf[:2])
+        buf = buf[2:]
+        self.on_packet(tup[0], buf, peer)
 
 net = Net()
 
@@ -479,7 +491,7 @@ class Guy(Object):
         super(self.__class__, self).__init__(**kwargs)
         
         self.profile = kwargs.get('profile')
-        self.dummy = kwargs.get("dummy", False)
+        self.dummy = self.profile.dummy
         self.on_give = Signal()
         self.on_plant = Signal()
         self.on_move = Signal()
@@ -748,6 +760,7 @@ class Guy(Object):
 
         if not self.frozen:
             btn = False
+            btn2 = False
             if not self.dummy:
                 btn = self.profile.btn(0)
                 btn2 = self.profile.btn(1)
@@ -1031,11 +1044,12 @@ class Joystick(object):
             return False
         
 class Profile(object):
-    def __init__(self, game, num, joy=None, client=None):
+    def __init__(self, game, num, joy=None, peer=None):
         self.game = game
         self.num = num
         self.score = 0
-        self.client = client
+        self.peer = peer
+        self.dummy = bool(self.peer)
         #self.color = (0xFF, 0xFF, 0xFF)
         if num == 0:
             self.color = (0xFF, 0xFF, 0xFF)
@@ -1048,6 +1062,9 @@ class Profile(object):
         self.joy = joy
     
     def btn(self, b, consume=False):
+
+        if self.peer:
+            return
         
         r = False
         
@@ -1175,15 +1192,27 @@ class GameMode(Mode):
 
 class PregameMode(Mode):
     def __init__(self, game):
+        self.player_id = 0
         self.game = game
         if net.client:
             self.progress = "Connecting to %s..." % sys.argv[1]
-            net.on_connect(self.waiting)
+            net.on_packet.connect(self.event)
         else: 
-            self.progress = "Waiting for players..."
+            self.game.init_profiles(0)
+            net.on_connect.connect(self.connect)
 
-    def waiting(self):
-        self.progress = "Waiting for more players..."
+    def connect(self, peer):
+        if self.game.add_profile(peer):
+            # send player info to client
+            buf = struct.pack('B', self.game.num_profiles()-1)
+            net.send(peer, Net.Event.INFO, buf, enet.PACKET_FLAG_RELIABLE)
+        else:
+            assert False # TEMP
+        if self.game.full():
+            # send game start message, and go!
+            net.broadcast(Net.Event.NEXT, "", enet.PACKET_FLAG_RELIABLE)
+            self.game.mode = GameMode(self.game)
+            print "STARTING"
         
     def logic(self, t):
         if net.online:
@@ -1194,6 +1223,18 @@ class PregameMode(Mode):
         self.game.screen.buf.fill((0,128,0))
         scr = self.game.screen
         text(scr, f, self.progress)
+
+    def event(self, ev, buf, peer):
+        if ev == Net.Event.NEXT:
+            print "starting"
+            self.game.mode = GameMode(self)
+            tup = struct.unpack('B', buf[:1])
+            self.game.init_online_profile(tup[0], self.player_id)
+        elif ev == Net.Event.INFO:
+            tup = struct.unpack('B', buf[:1])
+            buf = buf[1:]
+            self.player_id = tup[0]
+            
 
 def text(scr, font, text, n=1, col=(0xFF,0xFF,0xFF), pos=(0,0), shadow=None):
     if net.server:
@@ -1271,11 +1312,11 @@ class MenuMode(Mode):
         if isinstance(self.ops[self.choice],list):
             if pygame.K_j in self.game.keys:
                 self.ops[self.choice][1] = max(self.ops[self.choice][1]-1,self.ops[self.choice][2])
-                self.game.profile_count(self.ops[self.choice][1])
+                self.game.init_profiles(self.ops[self.choice][1])
                 self.game.keys.remove(pygame.K_j)
             elif pygame.K_l in self.game.keys:
                 self.ops[self.choice][1] = min(self.ops[self.choice][1]+1,self.ops[self.choice][3])
-                self.game.profile_count(self.ops[self.choice][1])
+                self.game.init_profile(self.ops[self.choice][1])
                 self.game.keys.remove(pygame.K_l)
             
         if pygame.K_i in self.game.keys:
@@ -1360,7 +1401,7 @@ class Engine:
             self.joys += [Joystick(i, joy)]
             idx+=1
 
-        self.profile_count(4)
+        self.init_profiles(4)
         
         pygame.display.set_caption(TITLE)
         
@@ -1393,8 +1434,11 @@ class Engine:
         self.chans[self.next_chan].play(snd)
         self.next_chan += 1
         self.next_chan %= len(self.chans)
+
+    def num_profiles(self):
+        return len(self.profiles)
     
-    def profile_count(self, n):
+    def init_profiles(self, n):
         
         self.profiles = []
         
@@ -1403,6 +1447,28 @@ class Engine:
                 Profile(self,i,index(self.joys,i)),
             ]
 
+    def init_online_profile(self, num_dummies, local):
+        self.profiles = []
+        
+        for i in range(n):
+            if local == i:
+                self.profiles += [
+                    Profile(self,i,index(self.joys,0)),
+                ]
+            else:
+                self.profiles += [
+                    Profile(self,i,None,Peer(None)),
+                ]
+
+    def add_profile(self, peer):
+        if not self.full():
+            self.profiles += [Profile(self, len(self.profiles), None, peer=peer)]
+            return True
+        return False
+        
+    def full(self):
+        return len(self.profiles) == 2
+        
     def __call__(self):
         
         self.done = False
