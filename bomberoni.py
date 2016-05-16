@@ -88,9 +88,9 @@ class Net:
         NEXT = 5
 
     class Peer:
-        def __init__(self, peer):
+        def __init__(self, peer, player_id=-1):
             self.peer = peer
-            self.uuid = random_string(8)
+            self.player_id = player_id
             self.last_recv = time.time()
 
         # def timeout(self):
@@ -130,7 +130,7 @@ class Net:
         self.on_packet = Signal()
         
     def poll(self):
-        event = self.host.service(1)
+        event = self.host.service(10)
         if event.type == enet.EVENT_TYPE_CONNECT:
             if self.server:
                 print "%s connected." % event.peer.host.address
@@ -143,8 +143,8 @@ class Net:
         elif event.type == enet.EVENT_TYPE_DISCONNECT:
             if self.server:
                 print "%s disconnected." % event.peer.host.address
-                self.peers = filter(lambda x: x.peer != event.peer, self.peers)
                 self.on_disconnect(self.peer(event.peer))
+                self.peers = filter(lambda x: x.peer != event.peer, self.peers)
             else:
                 print "Disconnected."
                 self.on_disconnect()
@@ -496,6 +496,10 @@ class Guy(Object):
         self.on_plant = Signal()
         self.on_move = Signal()
 
+        if net.online:
+            net.on_packet.connect(self.event)
+            self.on_move.connect(self.send_move)
+
         self.char = [
             'army',
             'fetusmaximus',
@@ -559,6 +563,31 @@ class Guy(Object):
         self.last_vel_intent = Vector2()
         self.old_pos = self.pos
 
+    def event(self, ev, data, peer):
+        if ev == Net.Event.MOVE:
+            if net.server:
+                (
+                    self.pos.x, self.pos.y,
+                    vx, vy
+                ) = struct.unpack('ffff',data)
+                net.broadcast(Net.Event.MOVE,
+                    struct.pack('B', peer.player_id) + data, 0)
+            elif self.dummy:
+                (profile_num,) = struct.unpack('B',data[:1])
+                if profile_num == self.profile.num:
+                    (
+                        self.pos.x, self.pos.y,
+                        self.vel.x, self.vel.y,
+                    ) = struct.unpack('ffff',data[1:])
+
+    def send_move(self):
+        if not self.dummy and self.vel:
+            data = struct.pack(
+                'ffff',
+                self.pos.x, self.pos.y, self.vel.x, self.vel.y
+            )
+            net.broadcast(Net.Event.MOVE, data, 0)
+    
     def get_radius(self):
         if self.curse == Curse.SmallBlast:
             return 1
@@ -1049,7 +1078,7 @@ class Profile(object):
         self.num = num
         self.score = 0
         self.peer = peer
-        self.dummy = bool(self.peer)
+        self.dummy = (self.peer != None)
         #self.color = (0xFF, 0xFF, 0xFF)
         if num == 0:
             self.color = (0xFF, 0xFF, 0xFF)
@@ -1063,8 +1092,8 @@ class Profile(object):
     
     def btn(self, b, consume=False):
 
-        if self.peer:
-            return
+        if self.dummy:
+            return False
         
         r = False
         
@@ -1092,7 +1121,7 @@ class Profile(object):
                 return r
         
         # temp keys
-        if self.num == 0:
+        if (not net.online and self.num == 0) or (net.online and not self.dummy):
         # if self.num == 0 and not self.joy:
             k = set(map(lambda x: ord(x), ('i','k','j','l',' '))) & set(self.game.keys)
 
@@ -1157,6 +1186,9 @@ class GameMode(Mode):
         self.world.objects = filter(lambda o: o.attached, self.world.objects)
         
     def logic(self,t):
+
+        if net.online:
+            net.poll()
         
         self.world.logic()
 
@@ -1204,15 +1236,19 @@ class PregameMode(Mode):
     def connect(self, peer):
         if self.game.add_profile(peer):
             # send player info to client
-            buf = struct.pack('B', self.game.num_profiles()-1)
+            player_id = self.game.num_profiles()-1
+            peer.player_id = player_id
+            buf = struct.pack('B', player_id)
             net.send(peer, Net.Event.INFO, buf, enet.PACKET_FLAG_RELIABLE)
         else:
             assert False # TEMP
         if self.game.full():
             # send game start message, and go!
-            net.broadcast(Net.Event.NEXT, "", enet.PACKET_FLAG_RELIABLE)
+            net.broadcast(
+                Net.Event.NEXT,
+                struct.pack('B',self.game.num_profiles()), enet.PACKET_FLAG_RELIABLE
+            )
             self.game.mode = GameMode(self.game)
-            print "STARTING"
         
     def logic(self, t):
         if net.online:
@@ -1226,10 +1262,9 @@ class PregameMode(Mode):
 
     def event(self, ev, buf, peer):
         if ev == Net.Event.NEXT:
-            print "starting"
-            self.game.mode = GameMode(self)
             tup = struct.unpack('B', buf[:1])
             self.game.init_online_profile(tup[0], self.player_id)
+            self.game.mode = GameMode(self.game)
         elif ev == Net.Event.INFO:
             tup = struct.unpack('B', buf[:1])
             buf = buf[1:]
@@ -1447,17 +1482,18 @@ class Engine:
                 Profile(self,i,index(self.joys,i)),
             ]
 
-    def init_online_profile(self, num_dummies, local):
+    def init_online_profile(self, n, local):
+        
         self.profiles = []
         
         for i in range(n):
             if local == i:
                 self.profiles += [
-                    Profile(self,i,index(self.joys,0)),
+                    Profile(self, i, index(self.joys, 0)),
                 ]
             else:
                 self.profiles += [
-                    Profile(self,i,None,Peer(None)),
+                    Profile(self, i, None, net.Peer(None, i)),
                 ]
 
     def add_profile(self, peer):
