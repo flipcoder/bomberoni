@@ -14,6 +14,7 @@ import enet
 import struct
 import string
 import time
+import types
 
 # random.seed()
 
@@ -631,14 +632,17 @@ class Guy(Object):
         elif ev == Net.Event.PLANT:
             if net.server:
                 if peer.player_id == self.profile.num:
-                    self.plant(Vector2(), True, True)
+                    pos = Vector2()
+                    (pos.x,pos.y) = struct.unpack('ff',data[:8])
+                    self.plant(Vector2(), True, True, pos)
                     net.broadcast(Net.Event.PLANT,
-                        struct.pack('B',peer.player_id),
+                        struct.pack('B',peer.player_id) + data,
                         enet.PACKET_FLAG_RELIABLE)
             else:
-                (profile_num,) = struct.unpack('B',data[:1])
+                pos = Vector2()
+                (profile_num,pos.x,pos.y) = struct.unpack('Bff',data[:9])
                 if profile_num == self.profile.num:
-                    self.plant(Vector2(), True, True)
+                    self.plant(Vector2(), True, True,pos)
         elif ev == Net.Event.GIVE:
             if net.client:
                 (profile_num,item,curse,) = struct.unpack('BBB',data[:3])
@@ -654,7 +658,8 @@ class Guy(Object):
                 if peer.player_id == self.profile.num:
                     self.trigger(True, True)
                     net.broadcast(Net.Event.TRIGGER,
-                        "", enet.PACKET_FLAG_RELIABLE)
+                        struct.pack('B',peer.player_id) + data,
+                        enet.PACKET_FLAG_RELIABLE)
             else:
                 (profile_num,) = struct.unpack('B',data[:1])
                 if profile_num == self.profile.num:
@@ -662,13 +667,17 @@ class Guy(Object):
         elif ev == Net.Event.MULTIPLANT:
             if net.server:
                 if peer.player_id == self.profile.num:
-                    self.multiplant(True, True)
+                    pos = Vector2()
+                    (pos.x,pos.y,direc) = struct.pack('ffB', data[:9])
+                    self.multiplant(True, True, pos, direc)
                     net.broadcast(Net.Event.MULTIPLANT,
-                        "", enet.PACKET_FLAG_RELIABLE)
+                        struct.pack('B',peer.player_id) + data,
+                        enet.PACKET_FLAG_RELIABLE)
             else:
-                (profile_num,) = struct.unpack('B',data[:1])
+                pos = Vector2()
+                (profile_num,pos.x,pos.y,direc) = struct.unpack('BffB',data[:10])
                 if profile_num == self.profile.num:
-                    self.multiplant(True, True)
+                    self.multiplant(True, True, pos, direc)
 
 
     def set_direction(self, vel):
@@ -686,10 +695,12 @@ class Guy(Object):
             return
         net.broadcast(Net.Event.TRIGGER, "", enet.PACKET_FLAG_RELIABLE)
 
-    def send_multiplant(self):
+    def send_multiplant(self, pos, direc):
         if self.dummy:
             return
-        net.broadcast(Net.Event.MULTIPLANT, "", enet.PACKET_FLAG_RELIABLE)
+        net.broadcast(Net.Event.MULTIPLANT,
+            struct.pack('ffB',pos.x,pos.y,direc),
+            enet.PACKET_FLAG_RELIABLE)
     
     def send_move(self):
         if not self.dummy:
@@ -701,10 +712,13 @@ class Guy(Object):
                 net.broadcast(Net.Event.MOVE, data, 0)
                 self.last_sent_vel = self.vel
     
-    def send_plant(self):
+    def send_plant(self, pos):
         if self.dummy:
             return
-        net.broadcast(Net.Event.PLANT, "", enet.PACKET_FLAG_RELIABLE)
+        net.broadcast(
+            Net.Event.PLANT,
+            struct.pack('ff',pos.x,pos.y),
+            enet.PACKET_FLAG_RELIABLE)
 
     def send_give(self, item, curse):
         net.broadcast(Net.Event.GIVE,
@@ -794,7 +808,7 @@ class Guy(Object):
             x.attached and isinstance(x, Bomb) and x.owner and x.owner()==self,
             self.game.world.objects) 
     
-    def plant(self, ofs = Vector2(), mute=False, force=False):
+    def plant(self, ofs = Vector2(), mute=False, force=False, pos=None):
         
         if self.curse == Curse.NoPlant:
             return None
@@ -806,14 +820,15 @@ class Guy(Object):
             return None
         
         # snaps plant position to grid
-        p = (self.pos + self.origin + ofs) // int(TILE_SZ) * int(TILE_SZ)
+        if not isinstance(pos, Vector2):
+            pos = (self.pos + self.origin + ofs) // int(TILE_SZ) * int(TILE_SZ)
         
         b = Bomb(
             fast=(self.curse==Curse.FastBomb),modern=self.remote,
-            game=self.game, pos=p, sz=TILE_SZ_T, solid=True, owner=self)
+            game=self.game, pos=pos, sz=TILE_SZ_T, solid=True, owner=self)
 
         if not mute:
-            self.on_plant()
+            self.on_plant(pos)
         if net.client and not force:
             return self.game.world.can_place(b)
 
@@ -824,32 +839,51 @@ class Guy(Object):
             return b
         return None
     
-    def dir_vec(self):
+    def encode_state(self):
         try:
             return {
-                "left": Vector2(-1.0, 0.0),
-                "right": Vector2(1.0, 0.0),
-                "up": Vector2(0.0, -1.0),
-                "down": Vector2(0.0, 1.0)
+                "left":0,
+                "right":1,
+                "up":2,
+                "down":3
             }[self.state]
         except KeyError:
             return None
+    
+    def dir_vec(self, direc=None):
+        try:
+            if type(direc) is types.NoneType: # use current state
+                return {
+                    "left": Vector2(-1.0, 0.0),
+                    "right": Vector2(1.0, 0.0),
+                    "up": Vector2(0.0, -1.0),
+                    "down": Vector2(0.0, 1.0)
+                }[self.state]
+            else:
+                return [
+                    Vector2(-1.0, 0.0),
+                    Vector2(1.0, 0.0),
+                    Vector2(0.0, -1.0),
+                    Vector2(0.0, 1.0)
+                ][direc]
+        except KeyError:
+            return None
         
-    def multiplant(self, mute=False, force=False):
+    def multiplant(self, mute=False, force=False, pos=None, direc=None):
         if not mute:
-            self.on_multiplant()
+            self.on_multiplant(pos, direc)
         if net.client and not force:
             return
         
         if self.curse == Curse.NoPlant:
             return None
         
-        d = self.dir_vec() * TILE_SZ
+        d = self.dir_vec(direc) * TILE_SZ
         if not d:
             return False
         ofs = copy(d)
         i = 0
-        while self.plant(ofs, True): # dont trigger callback
+        while self.plant(ofs, True, False, pos):
             ofs += d
             i += 1
         return i > 0
