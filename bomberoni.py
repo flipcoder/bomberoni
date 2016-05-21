@@ -345,7 +345,7 @@ class Wall(Object):
 
     def send(self, item):
         net.broadcast(Net.Event.SPAWN,
-            struct.pack('Bff',item.item_id,item.pos.x,item.pos.y),
+            struct.pack('=Bff',item.item_id,item.pos.x,item.pos.y),
             enet.PACKET_FLAG_RELIABLE)
 
 class Screen(Object):
@@ -640,14 +640,14 @@ class Guy(Object):
                         enet.PACKET_FLAG_RELIABLE)
             else:
                 pos = Vector2()
-                (profile_num,pos.x,pos.y) = struct.unpack('Bff',data[:9])
+                (profile_num,pos.x,pos.y) = struct.unpack('=Bff',data[:9])
                 if profile_num == self.profile.num:
-                    self.plant(Vector2(), True, True,pos)
+                    self.plant(Vector2(), True, True, pos)
         elif ev == Net.Event.GIVE:
             if net.client:
-                (profile_num,item,curse,) = struct.unpack('BBB',data[:3])
+                (profile_num,item,curse,) = struct.unpack('=BBB',data[:3])
                 if profile_num == self.profile.num:
-                    self.give(item, 0, True, True)
+                    self.give(item, curse, True, True)
         elif ev == Net.Event.KILL:
             if net.client:
                 (profile_num,) = struct.unpack('B',data[:1])
@@ -675,7 +675,7 @@ class Guy(Object):
                         enet.PACKET_FLAG_RELIABLE)
             else:
                 pos = Vector2()
-                (profile_num,pos.x,pos.y,direc) = struct.unpack('BffB',data[:10])
+                (profile_num,pos.x,pos.y,direc) = struct.unpack('=BffB',data[:10])
                 if profile_num == self.profile.num:
                     self.multiplant(True, True, pos, direc)
 
@@ -871,7 +871,7 @@ class Guy(Object):
         
     def multiplant(self, mute=False, force=False, pos=None, direc=None):
         if not mute:
-            self.on_multiplant(pos, direc)
+            self.on_multiplant(pos, direc * TILE_SZ)
         if net.client and not force:
             return
         
@@ -1362,7 +1362,7 @@ class GameMode(Mode):
     def event(self, ev, data, peer):
         if ev == Net.Event.SPAWN:
             pos = Vector2()
-            (item_id, pos.x, pos.y) = struct.unpack('Bff', data)
+            (item_id, pos.x, pos.y) = struct.unpack('=Bff', data)
             self.world.attach(self.world.items[item_id](
                 game=self.game, pos=pos, sz=TILE_SZ_T, solid=False
             ))
