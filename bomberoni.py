@@ -297,6 +297,7 @@ class Item(Object):
     Curse = 3
     Flame = 4
     Remote = 5
+    NoItem = 6
     
     def __init__(self, item_id, **kwargs):
         super(self.__class__, self).__init__(**kwargs)
@@ -333,20 +334,31 @@ class Wall(Object):
     def __init__(self, **kwargs):
         super(self.__class__, self).__init__(**kwargs)
     
-    def explode(self):
+    def explode(self, item=None):
         if self.breakable:
             if not net.client:
-                item = self.game.world.random_item(game=self.game, pos=self.pos, sz=TILE_SZ_T, solid=False)
+                if not item:
+                    item = self.game.world.random_item(game=self.game, pos=self.pos, sz=TILE_SZ_T, solid=False)
+                else:
+                    item = self.items(item, game=self.game, pos=self.pos, sz=TILE_SZ_T, solid=False)
                 if item:
-                    if net.server:
-                        self.send(item)
                     self.game.world.attach(item)
+                self.send(item, self.pos)
             self.attached = False
 
-    def send(self, item):
-        net.broadcast(Net.Event.SPAWN,
-            struct.pack('=Bff',item.item_id,item.pos.x,item.pos.y),
-            enet.PACKET_FLAG_RELIABLE)
+    def send(self, item, pos):
+            if item:
+                net.broadcast(Net.Event.SPAWN,
+                    struct.pack('=Bff',
+                        item.item_id, pos.x, pos.y
+                    ), enet.PACKET_FLAG_RELIABLE
+                )
+            else:
+                net.broadcast(Net.Event.SPAWN,
+                    struct.pack('=Bff',
+                        Item.NoItem, pos.x, pos.y
+                    ), enet.PACKET_FLAG_RELIABLE
+                )
 
 class Screen(Object):
     def __init__(self,screen,**kwargs):
@@ -468,7 +480,7 @@ class Bomb(Object):
             for rad in range(1,radius+1):
                 p = self.pos + (offset[d] * rad)
                 s = Splode(game=self.game, pos=p, sz=TILE_SZ_T, owner=self.owner)
-                o = self.game.world.overwrite(s, cb=cb, fail_cb=fail_cb)
+                o = self.game.world.overwrite(s, cb=cb, fail_cb=fail_cb, keep=net.client)
                 if o:
                     break
         
@@ -600,7 +612,7 @@ class Guy(Object):
         self.radius = 1
         self.frozen = False # disallow movement
         self.bombs = 1
-        self.kick = False
+        self.kick = True
         self.multi = False
         self.remote = False
         #self.last_bomb = None
@@ -1136,6 +1148,13 @@ class World:
         
         self.next_level = False
         
+    def clear(self, pos):
+        px, py = int(pos.x), int(pos.y)
+        for obj in self.objects:
+            ox, oy = int(obj.pos.x), int(obj.pos.y)
+            if ox == px and oy == py:
+                obj.attached = False
+    
     def attach(self, obj):
         if not obj.attached:
             self.objects += [obj]
@@ -1166,7 +1185,7 @@ class World:
             self.attach(obj)
             return True
 
-    def overwrite(self, obj, cb=None, fail_cb=None):
+    def overwrite(self, obj, cb=None, fail_cb=None, keep=False):
         if not obj.attached:
             objs = self.objects
             
@@ -1185,7 +1204,8 @@ class World:
             for r in matches:
                 if not cb or cb(objs[r]):
                     try:
-                        self.objects.remove(objs[r])
+                        if not keep:
+                            self.objects.remove(objs[r])
                         overwritten += [objs[r]]
                     except ValueError:
                         pass
@@ -1363,9 +1383,11 @@ class GameMode(Mode):
         if ev == Net.Event.SPAWN:
             pos = Vector2()
             (item_id, pos.x, pos.y) = struct.unpack('=Bff', data)
-            self.world.attach(self.world.items[item_id](
-                game=self.game, pos=pos, sz=TILE_SZ_T, solid=False
-            ))
+            self.world.clear(pos)
+            if item_id != Item.NoItem:
+                self.world.attach(self.world.items[item_id](
+                    game=self.game, pos=pos, sz=TILE_SZ_T, solid=False
+                ))
         elif ev == Net.Event.NEXT:
             (_, seed, player_score) = struct.unpack('BBB', data)
             net.seed = seed
