@@ -347,18 +347,11 @@ class Wall(Object):
             self.attached = False
 
     def send(self, item, pos):
-            if item:
-                net.broadcast(Net.Event.SPAWN,
-                    struct.pack('=Bff',
-                        item.item_id, pos.x, pos.y
-                    ), enet.PACKET_FLAG_RELIABLE
-                )
-            else:
-                net.broadcast(Net.Event.SPAWN,
-                    struct.pack('=Bff',
-                        Item.NoItem, pos.x, pos.y
-                    ), enet.PACKET_FLAG_RELIABLE
-                )
+        net.broadcast(Net.Event.SPAWN,
+            struct.pack('=Bff',
+                item.item_id if item else Item.NoItem, pos.x, pos.y
+            ), enet.PACKET_FLAG_RELIABLE
+        )
 
 class Screen(Object):
     def __init__(self,screen,**kwargs):
@@ -611,9 +604,9 @@ class Guy(Object):
         self.depth = 1
         self.radius = 1
         self.frozen = False # disallow movement
-        self.bombs = 1
-        self.kick = True
-        self.multi = False
+        self.bombs = 3
+        self.kick = False
+        self.multi = True
         self.remote = False
         #self.last_bomb = None
         self.curse_time = 0.0
@@ -632,7 +625,7 @@ class Guy(Object):
                         self.vel.x, self.vel.y
                     ) = struct.unpack('ffff',data)
                     net.broadcast(Net.Event.MOVE,
-                        struct.pack('B', peer.player_id) + data, 0)
+                        struct.pack('=B', peer.player_id) + data, 0)
             elif self.dummy:
                 (profile_num,) = struct.unpack('B',data[:1])
                 if profile_num == self.profile.num:
@@ -680,7 +673,7 @@ class Guy(Object):
             if net.server:
                 if peer.player_id == self.profile.num:
                     pos = Vector2()
-                    (pos.x,pos.y,direc) = struct.pack('ffB', data[:9])
+                    (pos.x,pos.y,direc) = struct.pack('=ffB', data[:9])
                     self.multiplant(True, True, pos, direc)
                     net.broadcast(Net.Event.MULTIPLANT,
                         struct.pack('B',peer.player_id) + data,
@@ -710,8 +703,9 @@ class Guy(Object):
     def send_multiplant(self, pos, direc):
         if self.dummy:
             return
+        print struct.pack('=ffB',pos.x,pos.y,direc)
         net.broadcast(Net.Event.MULTIPLANT,
-            struct.pack('ffB',pos.x,pos.y,direc),
+            struct.pack('=ffB',pos.x,pos.y,direc),
             enet.PACKET_FLAG_RELIABLE)
     
     def send_move(self):
@@ -882,17 +876,22 @@ class Guy(Object):
             return None
         
     def multiplant(self, mute=False, force=False, pos=None, direc=None):
+        d = self.dir_vec(direc) * TILE_SZ
+        if direc == None:
+            direc = self.encode_state()
+        if not d:
+            return False
+        if not pos:
+            pos = copy(self.pos)
+        
         if not mute:
-            self.on_multiplant(pos, direc * TILE_SZ)
+            self.on_multiplant(pos, direc)
         if net.client and not force:
             return
         
         if self.curse == Curse.NoPlant:
             return None
         
-        d = self.dir_vec(direc) * TILE_SZ
-        if not d:
-            return False
         ofs = copy(d)
         i = 0
         while self.plant(ofs, True, False, pos):
