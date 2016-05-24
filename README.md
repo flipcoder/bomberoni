@@ -2,7 +2,8 @@
 
 # bomberoni
 
-Bomberman clone speedhacked in python.
+Bomberman clone originally speedhacked in python.
+Online multiplayer added later.
 
 Copyright (c) Grady O'Connell, 2015
 
@@ -14,5 +15,5 @@ Graphics: [Mark "Alfred" McDaniel](http://github.com/alfredanonymous)
 
 ## What next?
 
-It's done!  Wait, not yet.  I will be adding net code soon. :)
+It's done except for the netcode which is a work in progress.
 
