@@ -343,7 +343,8 @@ class Wall(Object):
                     item = self.items(item, game=self.game, pos=self.pos, sz=TILE_SZ_T, solid=False)
                 if item:
                     self.game.world.attach(item)
-                self.send(item, self.pos)
+                if net.online:
+                    self.send(item, self.pos)
             self.attached = False
 
     def send(self, item, pos):
@@ -673,7 +674,9 @@ class Guy(Object):
             if net.server:
                 if peer.player_id == self.profile.num:
                     pos = Vector2()
-                    (pos.x,pos.y,direc) = struct.pack('=ffB', data[:9])
+                    px,py = 0.0,0.0
+                    (px,py,direc) = struct.unpack('=ffB', data[:9])
+                    pos = Vector2(px,py)
                     self.multiplant(True, True, pos, direc)
                     net.broadcast(Net.Event.MULTIPLANT,
                         struct.pack('B',peer.player_id) + data,
@@ -703,7 +706,6 @@ class Guy(Object):
     def send_multiplant(self, pos, direc):
         if self.dummy:
             return
-        print struct.pack('=ffB',pos.x,pos.y,direc)
         net.broadcast(Net.Event.MULTIPLANT,
             struct.pack('=ffB',pos.x,pos.y,direc),
             enet.PACKET_FLAG_RELIABLE)
@@ -1384,6 +1386,7 @@ class GameMode(Mode):
             (item_id, pos.x, pos.y) = struct.unpack('=Bff', data)
             self.world.clear(pos)
             if item_id != Item.NoItem:
+                print item_id
                 self.world.attach(self.world.items[item_id](
                     game=self.game, pos=pos, sz=TILE_SZ_T, solid=False
                 ))
@@ -1397,7 +1400,6 @@ class GameMode(Mode):
     def on_reset(self, player_score = 0xFF):
         if not net.server:
             return
-        print 'reseting'
         net.generate_seed()
         net.broadcast(
             Net.Event.NEXT,
