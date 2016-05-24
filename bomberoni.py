@@ -830,6 +830,8 @@ class Guy(Object):
         # snaps plant position to grid
         if not isinstance(pos, Vector2):
             pos = (self.pos + self.origin + ofs) // int(TILE_SZ) * int(TILE_SZ)
+        else:
+            pos = copy(pos + ofs)
         
         b = Bomb(
             fast=(self.curse==Curse.FastBomb),modern=self.remote,
@@ -878,13 +880,13 @@ class Guy(Object):
             return None
         
     def multiplant(self, mute=False, force=False, pos=None, direc=None):
-        d = self.dir_vec(direc) * TILE_SZ
         if direc == None:
             direc = self.encode_state()
+        d = self.dir_vec(direc) * TILE_SZ
         if not d:
             return False
         if not pos:
-            pos = copy(self.pos)
+            pos = (self.pos + self.origin) // int(TILE_SZ) * int(TILE_SZ)
         
         if not mute:
             self.on_multiplant(pos, direc)
@@ -1172,8 +1174,10 @@ class World:
                 return False
             
             return True
+        return False
         
     def place(self, obj):
+        print obj.pos.x, obj.pos.y
         if not obj.attached:
             objs = self.objects
             
@@ -1185,6 +1189,7 @@ class World:
             
             self.attach(obj)
             return True
+        return False
 
     def overwrite(self, obj, cb=None, fail_cb=None, keep=False):
         if not obj.attached:
