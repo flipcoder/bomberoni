@@ -826,19 +826,22 @@ class Guy(Object):
         # when player runs out of bombs, disallow planting
         if len(my_bombs) >= self.bombs:
             return None
+
+        pos = pos if pos else self.pos
         
         # snaps plant position to grid
-        if not isinstance(pos, Vector2):
-            pos = (self.pos + self.origin + ofs) // int(TILE_SZ) * int(TILE_SZ)
-        else:
-            pos = copy(pos + ofs)
+        if not mute:
+            self.on_plant(pos)
+        
+        # if not isinstance(pos, Vector2):
+        pos = (pos + self.origin + ofs) // int(TILE_SZ) * int(TILE_SZ)
+        # else:
+        #     pos = (pos + self.origin + ofs) // int(TILE_SZ) * int(TILE_SZ)
         
         b = Bomb(
             fast=(self.curse==Curse.FastBomb),modern=self.remote,
             game=self.game, pos=pos, sz=TILE_SZ_T, solid=True, owner=self)
 
-        if not mute:
-            self.on_plant(pos)
         if net.client and not force:
             return self.game.world.can_place(b)
 
@@ -886,7 +889,7 @@ class Guy(Object):
         if not d:
             return False
         if not pos:
-            pos = (self.pos + self.origin) // int(TILE_SZ) * int(TILE_SZ)
+            pos = self.pos
         
         if not mute:
             self.on_multiplant(pos, direc)
@@ -896,9 +899,9 @@ class Guy(Object):
         if self.curse == Curse.NoPlant:
             return None
         
-        ofs = copy(d)
         i = 0
-        while self.plant(ofs, True, False, pos):
+        ofs = copy(d)
+        while self.plant(ofs, True, True, pos):
             ofs += d
             i += 1
         return i > 0
@@ -1177,7 +1180,6 @@ class World:
         return False
         
     def place(self, obj):
-        print obj.pos.x, obj.pos.y
         if not obj.attached:
             objs = self.objects
             
@@ -1391,7 +1393,6 @@ class GameMode(Mode):
             (item_id, pos.x, pos.y) = struct.unpack('=Bff', data)
             self.world.clear(pos)
             if item_id != Item.NoItem:
-                print item_id
                 self.world.attach(self.world.items[item_id](
                     game=self.game, pos=pos, sz=TILE_SZ_T, solid=False
                 ))
