@@ -605,9 +605,9 @@ class Guy(Object):
         self.depth = 1
         self.radius = 1
         self.frozen = False # disallow movement
-        self.bombs = 3
+        self.bombs = 1
         self.kick = False
-        self.multi = True
+        self.multi = False
         self.remote = False
         #self.last_bomb = None
         self.curse_time = 0.0
@@ -1614,7 +1614,7 @@ class MenuMode(Mode):
                 self.game.keys.remove(pygame.K_j)
             elif pygame.K_l in self.game.keys:
                 self.ops[self.choice][1] = min(self.ops[self.choice][1]+1,self.ops[self.choice][3])
-                self.game.init_profile(self.ops[self.choice][1])
+                self.game.init_profiles(self.ops[self.choice][1])
                 self.game.keys.remove(pygame.K_l)
             
         if pygame.K_i in self.game.keys:
