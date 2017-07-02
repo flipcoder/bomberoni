@@ -1,2 +1,4 @@
 pygame
 euclid
+numpy
+six
