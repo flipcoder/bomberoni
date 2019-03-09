@@ -227,6 +227,7 @@ def tileset(fn, **kwargs):
 class Object(object):
     def __init__(self, **kwargs):
         self.game = kwargs.get('game')
+        self.game.update()
         self.attached = False
         
         self.pos = Vector2(*kwargs.get('pos', (0.0, 0.0)))
@@ -260,11 +261,14 @@ class Object(object):
     def logic(self, t):
         if self.vel.magnitude() >= EPSILON:
             self.pos += self.vel * t
+            self.game.update()
         
         if self.pos.x < -self.sz.x or self.pos.x >= self.game.world.sz.x:
             self.attached = False
+            self.game.update()
         elif self.pos.y < -self.sz.y or self.pos.y >= self.game.world.sz.y:
             self.attached = False
+            self.game.update()
     
     def render(self, view):
         assert self.surface
@@ -333,6 +337,7 @@ class Item(Object):
 class Wall(Object):
     def __init__(self, **kwargs):
         super(self.__class__, self).__init__(**kwargs)
+        self.game.update()
     
     def explode(self, item=None):
         if self.breakable:
@@ -346,6 +351,7 @@ class Wall(Object):
                 if net.online:
                     self.send(item, self.pos)
             self.attached = False
+            self.game.update()
 
     def send(self, item, pos):
         net.broadcast(Net.Event.SPAWN,
@@ -393,11 +399,15 @@ class Splode(Object):
         #if self.life >= 1.0:
         #    self.attached = False
         
+        last_a = int(round(self.anim_point))
         self.anim_point += t * self.anim_speed
         if self.anim_point >= len(self.frames[self.state])-1:
             self.anim_point = 0.0
             self.attached = False
+            self.game.update()
         a = int(round(self.anim_point))
+        if last_a != a: # new anim frame
+            self.game.update()
         if a > 3: # smoke frames no longer damage
             self.hurt = False
         if not net.server:
@@ -441,6 +451,8 @@ class Bomb(Object):
             self.radius = owner.get_radius() if owner else 1
         else:
             self.radius = 1
+
+        self.game.update()
 
     def explode(self):
         
@@ -505,10 +517,13 @@ class Bomb(Object):
                 self.game.play(self.game.splode_snd)
                 return
         
+        last_a = int(round(self.anim_point))
         self.anim_point += t * self.anim_speed
         if self.anim_point >= len(self.frames[self.state])-1:
             self.anim_point = 0.0
         a = int(round(self.anim_point))
+        if last_a != a:
+            self.game.update() # new frame
         
         if not net.server:
             self.surface = self.surfaces[self.frames[self.state][a]]
@@ -525,7 +540,7 @@ class Curse:
     SwapPlayer = 8
     Max = 9
 
-class Guy(Object):
+class Player(Object):
     SPEED = 55.0
     
     def __init__(self, **kwargs):
@@ -542,7 +557,7 @@ class Guy(Object):
         self.on_trigger = Signal()
 
         if net.online:
-            net.on_packet.connect(self.event, "guy" + str(self.profile.num))
+            net.on_packet.connect(self.event, "player" + str(self.profile.num))
             if net.server:
                 self.on_give.connect(self.send_give)
                 self.on_kill.connect(self.send_kill)
@@ -599,7 +614,7 @@ class Guy(Object):
         self.surface = None
         if self.surfaces:
             self.surface = self.surfaces[self.frames[self.state][0]]
-        self.speed = Guy.SPEED
+        self.speed = Player.SPEED
         self.origin = Vector2(TILE_SZ*.5,TILE_SZ*.75)
         self.solid = False
         self.depth = 1
@@ -749,7 +764,7 @@ class Guy(Object):
         self.state = "death"
         self.anim_speed = 2.0
         self.game.play(self.game.death_snd)
-        net.on_packet.disconnect("guy" + str(self.profile.num))
+        net.on_packet.disconnect("player" + str(self.profile.num))
         if net.server:
             self.attached = False
     
@@ -768,12 +783,12 @@ class Guy(Object):
         self.curse  = random.randint(1,Curse.Max-1) if not curse else curse
         self.curse_time = 10.0
         if self.curse == Curse.Slow:
-            self.speed = Guy.SPEED / 2.0
+            self.speed = Player.SPEED / 2.0
         elif self.curse == Curse.Fast:
-            self.speed = Guy.SPEED * 2.0
+            self.speed = Player.SPEED * 2.0
         elif self.curse == Curse.SwapPlayer:
             players_on_map = filter(lambda x:
-                x.attached and isinstance(x, Guy) and x != self, self.game.world.objects
+                x.attached and isinstance(x, Player) and x != self, self.game.world.objects
             )
             if len(players_on_map) >= 1:
                 random_player = random.choice(players_on_map)
@@ -786,7 +801,7 @@ class Guy(Object):
         if not self.curse:
             return
         if self.curse == Curse.Slow:
-            self.speed = Guy.SPEED
+            self.speed = Player.SPEED
         self.curse = None
         self.curse_time = 0.0
 
@@ -981,7 +996,12 @@ class Guy(Object):
                                 if self.snap():
                                     self.vel = Vector2(0.0, 0.0)
                     
-            
+                    self.game.update()
+                elif self.last_vel_intent.magnitude() >= EPSILON:
+                    # update to stop animation
+                    self.last_vel_intent = Vector2(0.0, 0.0)
+                    self.game.update()
+
             self.vel = v
 
         bad_objs = filter(lambda x: x.hurt, self.cols)
@@ -1379,13 +1399,15 @@ class GameMode(Mode):
     def __init__(self, game):
         self.game = game
         
-        self.guys = []
+        self.players = []
         self.reset()
  
         self.game.play(self.game.play_snd)
 
         if net.client:
             net.on_packet.connect(self.event, "game")
+
+        self.game.update()
 
     def event(self, ev, data, peer):
         if ev == Net.Event.SPAWN:
@@ -1417,13 +1439,13 @@ class GameMode(Mode):
         
         self.world = World(self.game)
         
-        for guy in self.guys:
-            if guy:
-               guy.attached = False
+        for player in self.players:
+            if player:
+               player.attached = False
         
         self.clean()
         
-        self.guys = []
+        self.players = []
         self.sessions = []
         spawns = (
             (TILE_SZ*1.0, TILE_SZ*1.0),
@@ -1434,12 +1456,15 @@ class GameMode(Mode):
  
         for i in range(len(self.game.profiles)):
             if self.game.profiles[i]:
-                g = Guy(profile=self.game.profiles[i], game=self.game, mode=self, pos=spawns[i], sz=TILE_SZ_T)
-                self.guys.append(g)
+                g = Player(profile=self.game.profiles[i], game=self.game, mode=self, pos=spawns[i], sz=TILE_SZ_T)
+                self.players.append(g)
                 self.world.attach(g)
         
     def clean(self):
+        len_objs = len(self.world.objects)
         self.world.objects = filter(lambda o: o.attached, self.world.objects)
+        if len_objs != len(self.world.objects):
+            self.game.update()
         
     def logic(self,t):
 
@@ -1450,14 +1475,14 @@ class GameMode(Mode):
 
         # end condition
         if not net.client:
-            guys_left = filter(lambda x: x.attached, self.guys)
-            guy_count = len(guys_left)
-            if guy_count == 0:
+            players_left = filter(lambda x: x.attached, self.players)
+            player_count = len(players_left)
+            if player_count == 0:
                 self.on_reset()
                 self.reset()
-            elif guy_count == 1:
-                guys_left[0].profile.score += 1
-                self.on_reset(guys_left[0].profile.num)
+            elif player_count == 1:
+                players_left[0].profile.score += 1
+                self.on_reset(players_left[0].profile.num)
                 self.reset()
         
         self.clean()
@@ -1583,6 +1608,7 @@ class MenuMode(Mode):
             ["players: %s", 4, 2, 4],
             "quit"
         ]
+        self.game.update()
         
     def select(self):
         if self.choice == 0:
@@ -1619,9 +1645,11 @@ class MenuMode(Mode):
             
         if pygame.K_i in self.game.keys:
             self.choice = max(0,self.choice-1)
+            self.game.update()
             self.game.keys.remove(pygame.K_i)
         if pygame.K_k in self.game.keys:
             self.choice = min(len(self.ops)-1, self.choice+1)
+            self.game.update()
             self.game.keys.remove(pygame.K_k)
 
         j = index(self.game.joys,0)
@@ -1704,7 +1732,7 @@ class Engine:
         pygame.display.set_caption(TITLE)
         
         if not net.server:
-            self.screen = Screen(pygame.display.set_mode(SCALED_SZ, pygame.DOUBLEBUF), sz=SCREEN_SZ)
+            self.screen = Screen(pygame.display.set_mode(SCALED_SZ, pygame.DOUBLEBUF), sz=SCREEN_SZ, game=self)
         self.font_size = SCALED_SZ[0]/100
         self.font = pygame.font.Font(FONT, self.font_size)
         self.clock = pygame.time.Clock()
@@ -1725,6 +1753,8 @@ class Engine:
             self.mode = MenuMode(self)
         else:
             self.mode = PregameMode(self)
+        
+        self.dirty = True
 
     def play(self,snd):
         if net.server:
@@ -1796,6 +1826,7 @@ class Engine:
                     self.keys += [ev.key]
                 if ev.key == pygame.K_PAGEUP:
                     self.world.next_level = True
+                    self.game.upodate()
             elif ev.type == pygame.KEYUP:
                 try:
                     self.keys.remove(ev.key)
@@ -1816,6 +1847,9 @@ class Engine:
             elif ev.type == pygame.JOYBUTTONDOWN:
                 j = filter(lambda j: j.num == ev.joy, self.joys)[0]
                 j.btn(ev.button, True)
+
+        if self.done:
+            self.update()
         
         self.mode.logic(t)
     
@@ -1824,11 +1858,16 @@ class Engine:
             return
         self.mode.render()
     
+    def update(self):
+        self.dirty = True
+    
     def draw(self):
         if net.server:
             return
-        self.screen.render()
-        pygame.display.flip()
+        if self.dirty:
+            self.screen.render()
+            pygame.display.flip()
+            self.dirty = False
 
 def main():
     return Engine()()
