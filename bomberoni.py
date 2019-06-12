@@ -298,6 +298,15 @@ class Item(Object):
     Flame = 4
     Remote = 5
     NoItem = 6
+
+    @staticmethod
+    def id_to_name(item_id):
+        return [
+            'Bomb','Kick','Multi','Curse','Flame','Remote','NoItem'
+        ][item_id]
+
+    def __str__(self):
+        return Item.id_to_name(self.item_id)
     
     def __init__(self, item_id, **kwargs):
         super(self.__class__, self).__init__(**kwargs)
@@ -344,6 +353,8 @@ class Wall(Object):
                 if item:
                     self.game.world.attach(item)
                 if net.online:
+                    # if item:
+                    #     print('Send item: %s' % item)
                     self.send(item, self.pos)
             self.attached = False
 
@@ -1111,12 +1122,13 @@ class World:
         h = self.h
 
         self.splode = tileset('data/gfx/explosion-toon.png')
+        
         self.items = [
             [lambda **kwargs: Item(Item.Bomb, surface=self.bomb_inc, **kwargs), 2.0],
-            [lambda **kwargs: Item(Item.Flame, surface=self.flame, **kwargs), 2.0],
-            [lambda **kwargs: Item(Item.Curse, surface=self.curse, **kwargs), 1.0],
             [lambda **kwargs: Item(Item.Kick, surface=self.kick, **kwargs), 0.5],
             [lambda **kwargs: Item(Item.Multi, surface=self.multibomb, **kwargs), 0.5],
+            [lambda **kwargs: Item(Item.Curse, surface=self.curse, **kwargs), 1.0],
+            [lambda **kwargs: Item(Item.Flame, surface=self.flame, **kwargs), 2.0],
             [lambda **kwargs: Item(Item.Remote, surface=self.remote, **kwargs), 0.5]
         ]
 
@@ -1393,9 +1405,14 @@ class GameMode(Mode):
             (item_id, pos.x, pos.y) = struct.unpack('=Bff', data)
             self.world.clear(pos)
             if item_id != Item.NoItem:
-                self.world.attach(self.world.items[item_id](
+                # print("item_id:")
+                # print(item_id)
+                item = self.world.items[item_id](
                     game=self.game, pos=pos, sz=TILE_SZ_T, solid=False
-                ))
+                )
+                # print("item:")
+                # print(item)
+                self.world.attach(item)
         elif ev == Net.Event.NEXT:
             (_, seed, player_score) = struct.unpack('BBB', data)
             net.seed = seed
